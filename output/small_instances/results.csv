@@ -1,0 +1,5 @@
+instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
+arc130,130,715,63,CPLEX CP,63,0.0018,35.7305
+arc130,130,715,63,CPLEX MIP,69,0.5339,15.2968
+arc130,130,715,63,OR-Tools CP-SAT,,0.0093,1.1598
+arc130,130,715,63,Gurobi MIP,125,0.1956,0.2449

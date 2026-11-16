@@ -1,0 +1,2 @@
+instance,n,edges,initial_bw,lb,solver,status,bandwidth,encoding_time,solve_time,total_time
+can__292,292,1124,284,33,OR-Tools CP-SAT,Feasible,237,0.0105,4.0012,4.0117
