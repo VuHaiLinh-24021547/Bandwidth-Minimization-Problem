@@ -1,20 +1,3 @@
-"""
-solver/CP/CplexCP.py
-====================
-CPLEX Constraint Programming solver for the Bandwidth Minimization Problem
-using the local agent.
-
-Uses ``docplex.cp.model.CpoModel`` to formulate the BMP as:
-
-* **Variables**: ``pos[i]`` ∈ {0, …, n−1}  (position of vertex i),
-  ``bw`` ∈ {0, …, n−1}  (bandwidth).
-* **Constraints**:
-    - ``AllDifferent(pos)``
-    - ``bw ≥ |pos[u] − pos[v]|``  for each edge (u, v)
-    - Symmetry breaking: ``pos[0] < pos[n−1]``  (for n ≥ 2)
-* **Objective**: minimise ``bw``.
-"""
-
 from __future__ import annotations
 
 import time
@@ -27,27 +10,8 @@ def solve(
     time_limit: int = 60,
     lower_bound: Optional[int] = None,
 ) -> Dict:
-    """Solve BMP with CPLEX CP Optimizer using the local agent.
-
-    Parameters
-    ----------
-    n : int
-        Number of vertices.
-    edges : list of (int, int)
-        Undirected edges (0-based, u < v).
-    time_limit : int
-        Wall-clock time limit in seconds.
-    lower_bound : int, optional
-        Theoretical lower bound (if known) to tighten domain and enable early termination.
-
-    Returns
-    -------
-    dict
-        Standardised result dictionary.
-    """
     from docplex.cp.model import CpoModel
 
-    # ---- Encoding phase ----
     enc_start = time.perf_counter()
 
     mdl = CpoModel(name="BMP_CPLEX_CP")
@@ -57,7 +21,7 @@ def solve(
     pos = [mdl.integer_var(0, n - 1, f"pos_{i}") for i in range(n)]
     bw = mdl.integer_var(min_bw, n - 1, "bw")
 
-    # All-different: each vertex gets a unique position
+    #  each vertex gets a unique position
     mdl.add(mdl.all_diff(pos))
 
     # Bandwidth constraints
@@ -87,25 +51,12 @@ def solve(
         result["status"] = "TimeLimitReached (encoding)"
         return result
 
-    # ---- Solving phase via local agent ----
-    import os
-    import shutil
-
     solve_limit = max(1, int(time_limit - enc_time))
     solve_kwargs = {
         "agent": "local",
         "TimeLimit": solve_limit,
         "LogVerbosity": "Quiet",
     }
-    if not shutil.which("cpoptimizer"):
-        candidates = [
-            os.path.abspath("ibm/ILOG/CPLEX_Studio222/cpoptimizer/bin/x86-64_linux/cpoptimizer"),
-            os.path.abspath(".venv/bin/cpoptimizer"),
-        ]
-        for c in candidates:
-            if os.path.isfile(c) and os.access(c, os.X_OK):
-                solve_kwargs["execfile"] = c
-                break
 
     solve_start = time.perf_counter()
     solution = mdl.solve(**solve_kwargs)

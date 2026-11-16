@@ -1,19 +1,4 @@
-#!/usr/bin/env python3
 """
-benchmark_all.py
-================
-Runs solvers on instances from the input directory and records results in CSV files,
-aligned with main.py standards:
-  - Computes theoretical graph-theoretic lower bounds (LB: deg, diam, nbhd)
-  - Computes initial bandwidth before permutation
-  - Uses the unified 11-column CSV schema matching main.py
-  - Segregates outputs into category folders:
-      output/small_instances/
-      output/large_instances/
-
-Columns in CSV:
-  instance, n, edges, initial_bw, lb, solver, status, bandwidth, encoding_time, solve_time, total_time
-
 Options:
   --input-dir    Directory containing instance files (default: input)
   --output-dir   Directory where category folders will be saved (default: output)

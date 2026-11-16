@@ -1,2 +1,2 @@
 instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
-arc130,130,715,63,OR-Tools CP-SAT,,0.0093,1.1598
+arc130,130,715,63,OR-Tools CP-SAT,67,0.0109,65.2162

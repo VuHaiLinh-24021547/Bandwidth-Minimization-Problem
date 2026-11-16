@@ -1,11 +1,4 @@
-#!/usr/bin/env python3
 """
-main.py
-=======
-CLI entry point for the Matrix Bandwidth Minimization Problem (BMP) benchmark.
-
-Usage
------
     # Run on a specific input file with a 60-second time limit and default results.csv:
     python main.py --file input/small_instances/bcspwr01.mtx.rnd --time-limit 60
 
@@ -47,7 +40,7 @@ def _get_instance_stem(filepath: str) -> str:
 
 
 def _run_solver(solver_name: str, solver_func, n: int, edges, time_limit: int, lower_bound: Optional[int] = None) -> dict:
-    """Run a single solver with graceful error handling."""
+    """Run a single solver with error handling."""
     try:
         result = solver_func(n, edges, time_limit=time_limit, lower_bound=lower_bound)
     except ImportError as exc:

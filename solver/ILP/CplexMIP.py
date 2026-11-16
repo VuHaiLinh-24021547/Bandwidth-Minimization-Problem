@@ -1,23 +1,3 @@
-"""
-solver/ILP/CplexMIP.py
-======================
-CPLEX Mixed-Integer Programming solver for the Bandwidth Minimization Problem
-using the local agent.
-
-Uses ``docplex.mp.model.Model`` with binary assignment variables:
-
-* **Variables**:
-    - ``x[i, p]`` ∈ {0, 1} — vertex *i* is assigned to position *p*.
-    - ``B`` ∈ [0, n−1]     — bandwidth (continuous or integer).
-* **Derived position**: ``pos[i] = Σ_p  p · x[i, p]``
-* **Constraints**:
-    - Each vertex to exactly one position: ``Σ_p x[i,p] = 1   ∀ i``
-    - Each position to exactly one vertex: ``Σ_i x[i,p] = 1   ∀ p``
-    - ``B ≥ pos[u] − pos[v]``  and  ``B ≥ pos[v] − pos[u]``  ∀ (u,v) ∈ E
-    - Symmetry breaking: ``pos[0] ≤ pos[n−1]``
-* **Objective**: minimise ``B``.
-"""
-
 from __future__ import annotations
 
 import time
@@ -30,27 +10,8 @@ def solve(
     time_limit: int = 60,
     lower_bound: Optional[int] = None,
 ) -> Dict:
-    """Solve BMP with CPLEX MIP using the local agent.
-
-    Parameters
-    ----------
-    n : int
-        Number of vertices.
-    edges : list of (int, int)
-        Undirected edges (0-based, u < v).
-    time_limit : int
-        Wall-clock time limit in seconds.
-    lower_bound : int, optional
-        Theoretical lower bound (if known) to tighten domain and enable early termination.
-
-    Returns
-    -------
-    dict
-        Standardised result dictionary.
-    """
     from docplex.mp.model import Model
 
-    # ---- Encoding phase ----
     enc_start = time.perf_counter()
 
     mdl = Model(name="BMP_CPLEX_MIP")
@@ -112,7 +73,6 @@ def solve(
         result["status"] = "TimeLimitReached (encoding)"
         return result
 
-    # ---- Solving phase via local agent ----
     solve_limit = max(1, int(time_limit - enc_time))
     mdl.set_time_limit(solve_limit)
     mdl.context.cplex_parameters.threads = 1

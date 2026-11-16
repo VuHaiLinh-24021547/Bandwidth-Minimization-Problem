@@ -1,19 +1,3 @@
-"""
-solver/CP/CPSat.py
-==================
-Google OR-Tools CP-SAT solver for the Bandwidth Minimization Problem.
-
-Uses ``ortools.sat.python.cp_model`` to formulate the BMP as:
-
-* **Variables**: ``pos[i]`` ∈ {0, …, n−1},  ``bw`` ∈ {0, …, n−1}.
-* **Constraints**:
-    - ``AddAllDifferent(pos)``
-    - For each (u, v) ∈ E: auxiliary ``diff`` and ``abs_diff`` variables
-      with ``AddAbsEquality(abs_diff, diff)`` and ``bw ≥ abs_diff``.
-    - Symmetry breaking: ``pos[0] < pos[n−1]``
-* **Objective**: minimise ``bw``.
-"""
-
 from __future__ import annotations
 
 import time
@@ -26,22 +10,8 @@ def solve(
     time_limit: int = 60,
     lower_bound: Optional[int] = None,
 ) -> Dict:
-    """Solve BMP with Google OR-Tools CP-SAT.
-
-    Parameters
-    ----------
-    n : int
-        Number of vertices.
-    edges : list of (int, int)
-        Undirected edges (0-based, u < v).
-    time_limit : int
-        Wall-clock time limit in seconds.
-    lower_bound : int, optional
-        Theoretical lower bound (if known) to tighten domain and enable early termination.
-    """
     from ortools.sat.python import cp_model
 
-    # ---- Encoding phase ----
     enc_start = time.perf_counter()
 
     model = cp_model.CpModel()
@@ -85,7 +55,6 @@ def solve(
         result["status"] = "TimeLimitReached (encoding)"
         return result
 
-    # ---- Solving phase ----
     solve_limit = max(1, int(time_limit - enc_time))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = solve_limit
