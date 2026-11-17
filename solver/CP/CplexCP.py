@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -57,6 +59,15 @@ def solve(
         "TimeLimit": solve_limit,
         "LogVerbosity": "Quiet",
     }
+    if not shutil.which("cpoptimizer"):
+        candidates = [
+            os.path.abspath("ibm/ILOG/CPLEX_Studio222/cpoptimizer/bin/x86-64_linux/cpoptimizer"),
+            os.path.abspath(".venv/bin/cpoptimizer"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c) and os.access(c, os.X_OK):
+                solve_kwargs["execfile"] = c
+                break
 
     solve_start = time.perf_counter()
     solution = mdl.solve(**solve_kwargs)

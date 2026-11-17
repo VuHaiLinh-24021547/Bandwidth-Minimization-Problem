@@ -1,15 +1,3 @@
-"""
-hb_parser.py
-============
-Loads sparse-matrix files (Matrix Market, Harwell-Boeing) and extracts graph
-properties for the Matrix Bandwidth Minimization Problem (BMP).
-
-Supported formats:
-- Matrix Market (.mtx, .mtx.rnd, or files beginning with %%MatrixMarket)
-  loaded via scipy.io.mmread.
-- Harwell-Boeing (.hb, .rua, .rsa, .psa) loaded via scipy.io.hb_read.
-"""
-
 from __future__ import annotations
 
 import io
@@ -62,27 +50,7 @@ def _read_raw_matrix(filepath: str) -> sparse.spmatrix:
 
 
 def load_hb_file(filepath: str) -> Tuple[int, List[Tuple[int, int]]]:
-    """Load a sparse-matrix file and convert to an undirected simple graph.
-
-    Parameters
-    ----------
-    filepath : str
-        Path to a Matrix Market (.mtx, .mtx.rnd) or Harwell-Boeing file.
-
-    Returns
-    -------
-    n : int
-        Number of vertices (0-indexed).
-    edges : list of (int, int)
-        Sorted list of unique undirected edges (u, v) with u < v.
-
-    Raises
-    ------
-    FileNotFoundError
-        If filepath does not exist.
-    ValueError
-        If the matrix is not square.
-    """
+    """Load a sparse-matrix file and convert to an undirected simple graph."""
     if not os.path.isfile(filepath):
         raise FileNotFoundError(f"File not found: '{filepath}'")
 
@@ -108,37 +76,3 @@ def load_hb_file(filepath: str) -> Tuple[int, List[Tuple[int, int]]]:
     edges = sorted(set(zip(coo.row.tolist(), coo.col.tolist())))
 
     return n, edges
-
-
-def generate_sample_hb(filepath: str, n: int = 15) -> str:
-    """Create a synthetic connected test file and return its path."""
-    random.seed(42)
-    edges: set[Tuple[int, int]] = set()
-
-    # Ensure connectivity with a random spanning tree
-    vertices = list(range(n))
-    random.shuffle(vertices)
-    for i in range(1, n):
-        u, v = vertices[i - 1], vertices[i]
-        edges.add((min(u, v), max(u, v)))
-
-    # Add extra random edges to bring the count up to ~2n
-    target = min(2 * n, n * (n - 1) // 2)
-    attempts = 0
-    while len(edges) < target and attempts < 10 * target:
-        u = random.randint(0, n - 1)
-        v = random.randint(0, n - 1)
-        if u != v:
-            edges.add((min(u, v), max(u, v)))
-        attempts += 1
-
-    sorted_edges = sorted(edges)
-    os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-
-    with open(filepath, "w", encoding="utf-8") as fh:
-        fh.write(f"Nombre del problema: synthetic_{n}\n")
-        fh.write(f"{n} {n} {len(sorted_edges)}\n")
-        for u, v in sorted_edges:
-            fh.write(f"{u + 1} {v + 1}\n")  # 1-based in file
-
-    return os.path.abspath(filepath)

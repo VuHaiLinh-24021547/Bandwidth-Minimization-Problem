@@ -1,45 +1,90 @@
 """
-    # Run on a specific input file with a 60-second time limit and default results.csv:
-    python main.py --file input/small_instances/bcspwr01.mtx.rnd --time-limit 60
+Usage
+-----
+    # Run on a specific input file with a 120-second time limit:
+    python main.py --file input/small_instances/arc130.mtx.rnd --time-limit 120
 
     # Custom CSV output path:
-    python main.py --file input/small_instances/bcspwr01.mtx.rnd --csv my_results.csv
+    python main.py --file input/small_instances/arc130.mtx.rnd --csv my_results.csv
 
     # Run only specific solvers:
-    python main.py --file input/small_instances/bcspwr01.mtx.rnd --solvers ortools cplex_cp
+    python main.py --file input/small_instances/arc130.mtx.rnd --solvers ortools cplex_cp
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import os
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-from hb_parser import generate_sample_hb, load_hb_file
-from utils import (
-    compute_caprara_salazar_lb,
+from hb_parser import load_hb_file
+from lb_loader import (
     compute_original_bandwidth,
-    compute_theoretical_lb,
-    format_results_table,
+    get_instance_category,
+    get_instance_stem,
+    load_lb_mapping,
+    lookup_lb,
     verify_solution,
 )
 
 
-def _get_instance_stem(filepath: str) -> str:
-    """Extract instance name without .mtx.rnd (or other extensions)."""
-    filename = os.path.basename(filepath)
-    if filename.endswith(".mtx.rnd"):
-        return filename[:-8]
-    elif filename.endswith(".rnd"):
-        return filename[:-4]
-    elif filename.endswith(".mtx"):
-        return filename[:-4]
-    return os.path.splitext(filename)[0]
+def format_results_table(
+    n: int,
+    num_edges: int,
+    original_bw: int,
+    results: List[Dict],
+    lb: Optional[int] = None,
+) -> str:
+    """Return a human-readable comparison table as a string."""
+    lines: List[str] = []
+    lines.append("=" * 100)
+    lines.append("BANDWIDTH MINIMIZATION PROBLEM — BENCHMARK RESULTS")
+    lines.append("=" * 100)
+    lines.append(f"  Vertices (n)         : {n}")
+    lines.append(f"  Edges    (|E|)       : {num_edges}")
+    lines.append(f"  Original bandwidth   : {original_bw}")
+    lines.append(f"  Lower Bound (LB)     : {lb if lb is not None else 'N/A'}")
+
+    lb_val = str(lb) if lb is not None else "-"
+    lines.append("-" * 85)
+
+    header = (
+        f"{'Solver':<18} {'LB':>6} {'Bandwidth':>10} "
+        f"{'Enc. Time (s)':>14} {'Solve Time (s)':>15}"
+    )
+    lines.append(header)
+    lines.append("-" * 85)
+
+    for r in results:
+        solver = r.get("solver", "?")
+        bw = r.get("bandwidth")
+        bw_str = str(bw) if bw is not None else "-"
+        enc_time = r.get("encoding_time")
+        enc_str = f"{enc_time:.3f}" if enc_time is not None else "-"
+        solve_time = r.get("solve_time")
+        solve_str = f"{solve_time:.3f}" if solve_time is not None else "-"
+
+        lines.append(
+            f"{solver:<18} {lb_val:>6} {bw_str:>10} "
+            f"{enc_str:>14} {solve_str:>15}"
+        )
+
+    lines.append("-" * 85)
+    lines.append("=" * 100)
+    return "\n".join(lines)
 
 
-def _run_solver(solver_name: str, solver_func, n: int, edges, time_limit: int, lower_bound: Optional[int] = None) -> dict:
+def _run_solver(
+    solver_name: str,
+    solver_func,
+    n: int,
+    edges,
+    time_limit: int,
+    lower_bound: Optional[int] = None,
+) -> dict:
     """Run a single solver with error handling."""
     try:
         result = solver_func(n, edges, time_limit=time_limit, lower_bound=lower_bound)
@@ -77,13 +122,13 @@ def main() -> None:
         type=str,
         default=None,
         help="Path to a sparse-matrix file (.mtx.rnd / .mtx / .hb / .rua / .rsa). "
-             "If omitted, a synthetic test file is generated.",
+             "If omitted, a default instance is selected.",
     )
     parser.add_argument(
         "--time-limit", "-t",
         type=int,
         default=120,
-        help="Time limit per solver in seconds (default: 60).",
+        help="Time limit per solver in seconds (default: 120).",
     )
     parser.add_argument(
         "--solvers", "-s",
@@ -93,39 +138,52 @@ def main() -> None:
         help="Which solvers to run (default: all four).",
     )
     parser.add_argument(
-        "--csv",
+        "--output-dir", "-o",
         type=str,
-        default="results.csv",
-        help="Output CSV file path to append benchmark results (default: results.csv).",
+        default="output",
+        help="Output folder path where category folders are stored (default: output).",
+    )
+    parser.add_argument(
+        "--no-export",
+        action="store_true",
+        help="Disable appending results to CSV files in output folder.",
+    )
+    parser.add_argument(
+        "--lb-csv",
+        type=str,
+        default=os.path.join("input", "lb.csv"),
+        help="Path to CSV containing precomputed lower bounds (default: input/lb.csv).",
     )
     args = parser.parse_args()
 
-    # ---- Load or generate input ----
+    # ---- Load or check input ----
     if args.file is not None:
         filepath = args.file
     else:
-        filepath = os.path.join("input", "sample_generated.mtx.rnd")
-        print(f"No input file specified — generating synthetic test: {filepath}")
-        generate_sample_hb(filepath, n=15)
+        filepath = os.path.join("input", "small_instances", "bcspwr01.mtx.rnd")
+        if not os.path.exists(filepath):
+            candidates = glob.glob(os.path.join("input", "**", "*.mtx.rnd"), recursive=True)
+            if candidates:
+                filepath = candidates[0]
+            else:
+                print("Error: No input file specified and none found in input/.")
+                sys.exit(1)
+        print(f"No input file specified — using default: {filepath}")
 
     print(f"\nLoading: {filepath}")
     n, edges = load_hb_file(filepath)
     original_bw = compute_original_bandwidth(n, edges)
-    instance_stem = _get_instance_stem(filepath)
+    instance_stem = get_instance_stem(filepath)
 
-    # ---- Compute Graph-Theoretic Lower Bound ----
-    lb_info = compute_caprara_salazar_lb(n, edges)
+    # ---- Load Lower Bound from CSV ----
+    lb_table = load_lb_mapping(args.lb_csv)
+    lb = lookup_lb(instance_stem, lb_table)
 
     print(f"  Instance : {instance_stem}")
     print(f"  Vertices : {n}")
     print(f"  Edges    : {len(edges)}")
     print(f"  Original bandwidth (identity permutation): {original_bw}")
-    lb_parts = [f"deg: {lb_info['lb_deg']}"]
-    if "alpha" in lb_info:
-        lb_parts.append(f"alpha: {lb_info['alpha']}")
-    if "gamma" in lb_info:
-        lb_parts.append(f"gamma: {lb_info['gamma']}")
-    print(f"  Lower Bound (LB)                         : {lb_info['lb']} ({', '.join(lb_parts)})")
+    print(f"  Lower Bound (LB)                         : {lb if lb is not None else 'N/A'}")
     print()
 
     # ---- Solver registry ----
@@ -153,7 +211,7 @@ def main() -> None:
             n,
             edges,
             args.time_limit,
-            lower_bound=lb_info.get("lb"),
+            lower_bound=lb,
         )
         verify_solution(n, edges, result)
         results.append(result)
@@ -168,14 +226,13 @@ def main() -> None:
         print()
 
     # ---- Print summary table ----
-    print(format_results_table(n, len(edges), original_bw, results, lb_info=lb_info))
+    print(format_results_table(n, len(edges), original_bw, results, lb=lb))
 
-    # ---- Export to CSV ----
-    if args.csv:
-        csv_path = args.csv
-        parent_dir = os.path.dirname(csv_path)
-        if parent_dir:
-            os.makedirs(parent_dir, exist_ok=True)
+    # ---- Export to Category CSV ----
+    if not args.no_export:
+        category = get_instance_category(filepath)
+        cat_output_dir = os.path.join(args.output_dir, category)
+        os.makedirs(cat_output_dir, exist_ok=True)
 
         fieldnames = [
             "instance",
@@ -188,30 +245,32 @@ def main() -> None:
             "solve_time",
         ]
 
-        write_header = (not os.path.exists(csv_path)) or (os.path.getsize(csv_path) == 0)
+        for r in results:
+            solver_name = r.get("solver", "?")
+            safe_name = solver_name.replace(" ", "_").replace("-", "_")
+            csv_path = os.path.join(cat_output_dir, f"{safe_name}.csv")
 
-        with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            if write_header:
-                writer.writeheader()
+            write_header = (not os.path.exists(csv_path)) or (os.path.getsize(csv_path) == 0)
+            with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if write_header:
+                    writer.writeheader()
 
-            for r in results:
                 enc_time = r.get("encoding_time")
                 sol_time = r.get("solve_time")
-
                 row = {
                     "instance": instance_stem,
                     "n": n,
                     "edges": len(edges),
-                    "lb": lb_info["lb"],
-                    "solver": r.get("solver", "?"),
+                    "lb": lb if lb is not None else "",
+                    "solver": solver_name,
                     "bandwidth": r.get("bandwidth") if r.get("bandwidth") is not None else "",
                     "encoding_time": round(enc_time, 4) if enc_time is not None else "",
                     "solve_time": round(sol_time, 4) if sol_time is not None else "",
                 }
                 writer.writerow(row)
 
-        print(f"\nAppended benchmark results to '{csv_path}'")
+        print(f"\nAppended benchmark results to '{cat_output_dir}/'")
 
 
 if __name__ == "__main__":

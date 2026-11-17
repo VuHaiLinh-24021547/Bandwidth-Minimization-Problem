@@ -1,2 +1,3 @@
 instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
-arc130,130,715,63,CPLEX CP,63,0.0018,19.125
+arc130,130,715,63,CPLEX CP,63,0.0024,50.5971
+arc130,130,715,63,CPLEX CP,63,0.0019,16.7305

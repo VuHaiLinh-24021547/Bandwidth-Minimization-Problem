@@ -3,9 +3,10 @@ Options:
   --input-dir    Directory containing instance files (default: input)
   --output-dir   Directory where category folders will be saved (default: output)
   --category     Run only 'small_instances', 'large_instances', or 'all' (default: all)
-  --time-limit   Time limit per solver execution in seconds (default: 60)
+  --time-limit   Time limit per solver execution in seconds (default: 120)
   --solvers      Specific solvers to run (default: cplex_cp cplex_mip ortools gurobi)
   --instances    Optional list of specific instance names or patterns to run
+  --lb-csv       Path to CSV containing precomputed lower bounds (default: input/lb.csv)
 """
 
 from __future__ import annotations
@@ -19,10 +20,12 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from hb_parser import load_hb_file
-from utils import (
-    compute_caprara_salazar_lb,
+from lb_loader import (
     compute_original_bandwidth,
-    compute_theoretical_lb,
+    get_instance_category,
+    get_instance_stem,
+    load_lb_mapping,
+    lookup_lb,
     verify_solution,
 )
 
@@ -57,30 +60,6 @@ def get_solver_registry() -> Dict[str, Tuple[str, any]]:
     return registry
 
 
-def get_instance_category(filepath: str) -> str:
-    """Determine whether an instance is small or large based on its directory path."""
-    norm = filepath.replace("\\", "/").lower()
-    if "large_instances" in norm or "large instances" in norm:
-        return "large_instances"
-    elif "small_instances" in norm or "small instances" in norm:
-        return "small_instances"
-    else:
-        parent = os.path.basename(os.path.dirname(filepath))
-        return parent if parent not in ("", ".", "input") else "small_instances"
-
-
-def get_instance_stem(filepath: str) -> str:
-    """Extract instance name without .mtx.rnd (or other extensions)."""
-    filename = os.path.basename(filepath)
-    if filename.endswith(".mtx.rnd"):
-        return filename[:-8]
-    elif filename.endswith(".rnd"):
-        return filename[:-4]
-    elif filename.endswith(".mtx"):
-        return filename[:-4]
-    return os.path.splitext(filename)[0]
-
-
 def find_instance_files(input_dir: str, category_filter: str = "all") -> Dict[str, List[str]]:
     """Find all .mtx.rnd (and fallback data) files grouped by category."""
     patterns = [
@@ -113,7 +92,7 @@ def find_instance_files(input_dir: str, category_filter: str = "all") -> Dict[st
 
 def run_benchmark():
     parser = argparse.ArgumentParser(
-        description="Run solvers on instances and export results aligned with main.py."
+        description="Run solvers on instances and export results."
     )
     parser.add_argument(
         "--input-dir", "-i",
@@ -138,7 +117,7 @@ def run_benchmark():
         "--time-limit", "-t",
         type=int,
         default=120,
-        help="Timeout in seconds for each solver (default: 60)",
+        help="Timeout in seconds for each solver (default: 120)",
     )
     parser.add_argument(
         "--solvers", "-s",
@@ -153,7 +132,16 @@ def run_benchmark():
         default=None,
         help="Optional list of specific instance names or patterns to run",
     )
+    parser.add_argument(
+        "--lb-csv",
+        type=str,
+        default=os.path.join("input", "lb.csv"),
+        help="Path to CSV containing precomputed lower bounds (default: input/lb.csv)",
+    )
     args = parser.parse_args()
+
+    lb_table = load_lb_mapping(args.lb_csv)
+    print(f"Loaded {len(lb_table)} precomputed lower bounds from '{args.lb_csv}'.")
 
     grouped_files = find_instance_files(args.input_dir, args.category)
 
@@ -220,12 +208,6 @@ def run_benchmark():
             csv_handles[solver_key] = fh
             csv_writers[solver_key] = writer
 
-        # Consolidated summary CSV for this category
-        summary_path = os.path.join(cat_output_dir, "results.csv")
-        summary_fh = open(summary_path, mode="w", newline="", encoding="utf-8", buffering=1)
-        summary_writer = csv.DictWriter(summary_fh, fieldnames=csv_headers)
-        summary_writer.writeheader()
-
         try:
             for idx, filepath in enumerate(file_list, start=1):
                 instance_stem = get_instance_stem(filepath)
@@ -248,19 +230,13 @@ def run_benchmark():
                             "solve_time": "",
                         }
                         csv_writers[solver_key].writerow(err_row)
-                        summary_writer.writerow(err_row)
                     continue
 
                 original_bw = compute_original_bandwidth(n, edges)
-                lb_info = compute_caprara_salazar_lb(n, edges)
-                lb_parts = [f"deg:{lb_info.get('lb_deg', 0)}"]
-                if "alpha" in lb_info:
-                    lb_parts.append(f"alpha:{lb_info['alpha']}")
-                if "gamma" in lb_info:
-                    lb_parts.append(f"gamma:{lb_info['gamma']}")
+                lb = lookup_lb(instance_stem, lb_table)
                 print(
                     f"    n={n}, |E|={len(edges)}, Init BW={original_bw}, "
-                    f"LB={lb_info['lb']} ({', '.join(lb_parts)})"
+                    f"LB={lb if lb is not None else 'N/A'}"
                 )
 
                 for solver_key in args.solvers:
@@ -270,14 +246,13 @@ def run_benchmark():
                             "instance": instance_stem,
                             "n": n,
                             "edges": len(edges),
-                            "lb": lb_info["lb"],
+                            "lb": lb if lb is not None else "",
                             "solver": display_name,
                             "bandwidth": "",
                             "encoding_time": "",
                             "solve_time": "",
                         }
                         csv_writers[solver_key].writerow(err_row)
-                        summary_writer.writerow(err_row)
                         continue
 
                     print(f"    Running {display_name}...", end="", flush=True)
@@ -286,7 +261,7 @@ def run_benchmark():
                             n,
                             edges,
                             time_limit=args.time_limit,
-                            lower_bound=lb_info.get("lb"),
+                            lower_bound=lb,
                         )
                         verify_solution(n, edges, res)
 
@@ -298,7 +273,7 @@ def run_benchmark():
                             "instance": instance_stem,
                             "n": n,
                             "edges": len(edges),
-                            "lb": lb_info["lb"],
+                            "lb": lb if lb is not None else "",
                             "solver": display_name,
                             "bandwidth": bw if bw is not None else "",
                             "encoding_time": round(enc_time, 4) if enc_time is not None else "",
@@ -306,7 +281,6 @@ def run_benchmark():
                         }
 
                         csv_writers[solver_key].writerow(row)
-                        summary_writer.writerow(row)
 
                         enc_s = f"{enc_time:.4f}s" if enc_time is not None else "N/A"
                         sol_s = f"{sol_time:.4f}s" if sol_time is not None else "N/A"
@@ -318,21 +292,19 @@ def run_benchmark():
                             "instance": instance_stem,
                             "n": n,
                             "edges": len(edges),
-                            "lb": lb_info["lb"],
+                            "lb": lb if lb is not None else "",
                             "solver": display_name,
                             "bandwidth": "",
                             "encoding_time": "",
                             "solve_time": "",
                         }
                         csv_writers[solver_key].writerow(err_row)
-                        summary_writer.writerow(err_row)
 
         finally:
             for fh in csv_handles.values():
                 fh.close()
-            summary_fh.close()
 
-        print(f"\n    ✓ Finished {category}! CSV tables written to '{cat_output_dir}'.\n")
+        print(f"\n    Finished {category}! CSV tables written to '{cat_output_dir}'.\n")
 
     print(f"All benchmarks complete! Results organized in '{args.output_dir}'.")
 
