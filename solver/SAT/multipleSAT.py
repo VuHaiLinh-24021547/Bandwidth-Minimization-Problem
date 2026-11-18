@@ -2,193 +2,188 @@
 Multiple (Non-Incremental) SAT Solver for Bandwidth Minimization Problem (BMP)
 -----------------------------------------------------------------------------
 Uses Order Encoding to solve BMP via Binary Search over bandwidth bounds [LB, UB].
-For each candidate bandwidth k, a new SAT formula and solver instance are created.
+For each candidate bandwidth k, a fresh SAT formula and solver instance are created.
 
-Requirements adherence:
-- Uses time.perf_counter() to measure encoding_time and solve_stime.
-- Supports timeout interruption if encoding or solving exceeds limit (via threading.Timer & solver.interrupt).
-- Formats output according to requirements.md: instance, n, edges, lb, encoding_time, solve_stime.
+Conforms to standard solver interface:
+    solve(n, edges, time_limit=60, lower_bound=None) -> Dict
+Compatible with main.py, benchmark_all.py, and requirements.md.
 """
 
-import sys
+from __future__ import annotations
+
 import os
+import sys
 import time
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Ensure project root is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from encoder.order import OrderEncoder
-from utils import load_instance, load_lower_bounds, write_result_csv
-from pysat.solvers import Glucose4, Solver
+from pysat.solvers import Solver
 
 
-class MultipleSATSolver:
+def get_rcm_upper_bound(n: int, edges: List[Tuple[int, int]]) -> Tuple[int, List[int]]:
     """
-    Non-incremental SAT solver executing Binary Search over target bandwidth k.
+    Compute an initial upper bound and permutation using the Reverse Cuthill-McKee (RCM) heuristic.
+    Runs in O(|V| + |E|) time (< 1 ms).
     """
+    try:
+        import scipy.sparse as sp
+        import scipy.sparse.csgraph as csg
+        import numpy as np
 
-    def __init__(
-        self,
-        n: int,
-        edges: list,
-        lb: int = 1,
-        ub: Optional[int] = None,
-        timeout: float = 300.0,
-        solver_name: str = "glucose4"
-    ):
-        self.n = n
-        self.edges = edges
-        self.lb = max(1, lb)
-        self.ub = min(n - 1, ub) if ub is not None else n - 1
-        self.timeout = timeout
-        self.solver_name = solver_name
+        row = [u for u, v in edges]
+        col = [v for u, v in edges]
+        data = np.ones(len(edges), dtype=int)
+        mat = sp.csr_matrix((data, (row, col)), shape=(n, n))
+        mat = mat + mat.T
+        perm = csg.reverse_cuthill_mckee(mat)
+        inv_perm = np.zeros(n, dtype=int)
+        inv_perm[perm] = np.arange(n)
+        bw = max(abs(inv_perm[u] - inv_perm[v]) for u, v in edges) if edges else 0
+        return int(bw), inv_perm.tolist()
+    except Exception:
+        return n - 1, list(range(n))
 
-    def solve(self) -> Dict[str, Any]:
-        """
-        Execute Binary Search to find the minimum bandwidth.
-        Tracks encoding_time and solve_stime with timeout interruption guard.
-        """
-        total_encoding_time = 0.0
-        total_solve_time = 0.0
-        start_wall_time = time.perf_counter()
 
-        low = self.lb
-        high = self.ub
-        best_bw = high
-        best_labeling = None
-        status = "UNKNOWN"
+def solve(
+    n: int,
+    edges: List[Tuple[int, int]],
+    time_limit: int = 60,
+    lower_bound: Optional[int] = None,
+    solver_name: str = "glucose4",
+) -> Dict:
+    """
+    Standard solver entry point for MultipleSAT with Order Encoding.
 
-        encoder = OrderEncoder(self.n, self.edges)
+    :param n: Number of vertices (0-indexed or 1-indexed).
+    :param edges: List of undirected edge tuples.
+    :param time_limit: Wall-clock timeout in seconds.
+    :param lower_bound: Optional theoretical lower bound (e.g. from lb.csv).
+    :param solver_name: Underlying PySAT solver backend (default: glucose4).
+    :return: Dictionary containing solver metrics and permutation.
+    """
+    total_encoding_time = 0.0
+    total_solve_time = 0.0
+    start_wall_time = time.perf_counter()
 
-        # Quick check if low >= high
-        if low >= high:
-            clauses, enc_t = self._timed_encode(encoder, low)
-            total_encoding_time += enc_t
-            rem = max(0.01, self.timeout - (time.perf_counter() - start_wall_time))
-            sat, model, s_t = self._timed_solve(clauses, rem)
-            total_solve_time += s_t
-            if sat is True:
-                best_bw = low
-                best_labeling = encoder.decode(model)
-                status = "OPTIMAL"
-            elif sat is False:
-                best_bw = high
-                status = "INFEASIBLE_LB"
-            else:
-                status = "TIMEOUT"
-            return {
-                "opt_bandwidth": best_bw,
-                "encoding_time": total_encoding_time,
-                "solve_stime": total_solve_time,
-                "status": status,
-                "labeling": best_labeling
-            }
+    lb = max(1, lower_bound) if lower_bound is not None and lower_bound > 0 else 1
 
-        while low <= high:
-            # Check global timeout
-            elapsed = time.perf_counter() - start_wall_time
-            if elapsed >= self.timeout:
-                status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
-                break
+    # Heuristic initial upper bound via RCM
+    t_rcm0 = time.perf_counter()
+    rcm_bw, rcm_perm = get_rcm_upper_bound(n, edges)
+    total_encoding_time += (time.perf_counter() - t_rcm0)
 
-            mid = (low + high) // 2
+    best_bw = rcm_bw
+    best_perm = rcm_perm
+    status = "Feasible"
 
-            # 1. Encoding with timeout guard
-            t_enc0 = time.perf_counter()
-            clauses = encoder.encode(mid)
-            enc_t = time.perf_counter() - t_enc0
-            total_encoding_time += enc_t
-
-            elapsed = time.perf_counter() - start_wall_time
-            if elapsed >= self.timeout:
-                status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
-                break
-
-            # 2. Solving with timeout guard
-            remaining_time = max(0.01, self.timeout - elapsed)
-            sat, model, s_t = self._timed_solve(clauses, remaining_time)
-            total_solve_time += s_t
-
-            if sat is None or (time.perf_counter() - start_wall_time) >= self.timeout:
-                # Interrupted due to timeout
-                status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
-                break
-
-            if sat is True:
-                labeling = encoder.decode(model)
-                actual_bw = encoder.compute_bandwidth(labeling)
-                if actual_bw <= best_bw:
-                    best_bw = actual_bw
-                    best_labeling = labeling
-                # Tighten upper bound
-                high = min(mid - 1, actual_bw - 1)
-                status = "OPTIMAL"
-            else:
-                # mid is infeasible
-                low = mid + 1
-
-        if low > high and status != "TIMEOUT" and status != "FEASIBLE":
-            status = "OPTIMAL"
-
+    # Early exit if heuristic matches lower bound
+    if best_bw <= lb:
         return {
-            "opt_bandwidth": best_bw,
+            "solver": "Order MultipleSAT",
+            "status": "Optimal",
+            "bandwidth": best_bw,
+            "permutation": best_perm,
             "encoding_time": total_encoding_time,
-            "solve_stime": total_solve_time,
-            "status": status,
-            "labeling": best_labeling
+            "solve_time": 0.0,
         }
 
-    def _timed_encode(self, encoder: OrderEncoder, k: int):
-        t0 = time.perf_counter()
-        clauses = encoder.encode(k)
-        t_enc = time.perf_counter() - t0
-        return clauses, t_enc
+    encoder = OrderEncoder(n, edges, use_strengthening=True, use_symmetry_breaking=True)
 
-    def _timed_solve(self, clauses: list, timeout_sec: float):
-        t0 = time.perf_counter()
-        solver = Solver(name=self.solver_name, bootstrap_with=clauses)
-        timer = threading.Timer(timeout_sec, solver.interrupt)
+    low = lb
+    high = best_bw - 1
+
+    while low <= high:
+        elapsed = time.perf_counter() - start_wall_time
+        if elapsed >= time_limit:
+            status = "TimeLimitReached"
+            break
+
+        mid = (low + high) // 2
+
+        # 1. Encoding
+        t_enc0 = time.perf_counter()
+        clauses = encoder.encode(mid)
+        enc_t = time.perf_counter() - t_enc0
+        total_encoding_time += enc_t
+
+        elapsed = time.perf_counter() - start_wall_time
+        if elapsed >= time_limit:
+            status = "TimeLimitReached"
+            break
+
+        # 2. Solving with timeout guard
+        remaining_time = max(0.01, float(time_limit) - elapsed)
+        t_s0 = time.perf_counter()
+        solver = Solver(name=solver_name, bootstrap_with=clauses)
+        timer = threading.Timer(remaining_time, solver.interrupt)
         timer.start()
+
+        sat = None
+        model = None
         try:
             sat = solver.solve_limited(expect_interrupt=True)
-            model = solver.get_model() if sat is True else None
+            if sat is True:
+                model = solver.get_model()
         finally:
             timer.cancel()
-            s_t = time.perf_counter() - t0
+            s_t = time.perf_counter() - t_s0
+            total_solve_time += s_t
             solver.delete()
-        return sat, model, s_t
 
+        if sat is None or (time.perf_counter() - start_wall_time) >= time_limit:
+            status = "TimeLimitReached"
+            break
 
-def solve_file(file_path: str, lb_map: dict, timeout: float = 300.0, solver_name: str = "glucose4") -> Dict[str, Any]:
-    inst_name, n, m, edges = load_instance(file_path)
-    lb = lb_map.get(inst_name, 1)
+        if sat is True:
+            perm = encoder.decode_permutation(model)
+            # encoder.edges are always 1-based internally, so index with u-1, v-1
+            actual_bw = max(
+                abs(perm[u - 1] - perm[v - 1])
+                for u, v in encoder.edges
+            ) if encoder.edges else 0
 
-    solver = MultipleSATSolver(n=n, edges=edges, lb=lb, timeout=timeout, solver_name=solver_name)
-    res = solver.solve()
+            if actual_bw <= best_bw:
+                best_bw = actual_bw
+                best_perm = perm
+
+            if best_bw <= lb:
+                status = "Optimal"
+                break
+
+            high = min(mid - 1, actual_bw - 1)
+            status = "Optimal"
+        else:
+            low = mid + 1
+
+    if low > high and status != "TimeLimitReached":
+        status = "Optimal"
 
     return {
-        "instance": inst_name,
-        "n": n,
-        "edges": m,
-        "lb": lb,
-        "encoding_time": round(res["encoding_time"], 4),
-        "solve_stime": round(res["solve_stime"], 4),
-        "bandwidth": res["opt_bandwidth"],
-        "status": res["status"],
-        "solver": "MultipleSAT_Order"
+        "solver": "Order MultipleSAT",
+        "status": status,
+        "bandwidth": best_bw,
+        "permutation": best_perm,
+        "encoding_time": total_encoding_time,
+        "solve_time": total_solve_time,
     }
 
 
 if __name__ == "__main__":
-    import argparse
+    from utils.hb_parser import load_hb_file
+    from utils.lb_loader import load_lb_mapping, lookup_lb, get_instance_stem
 
-    parser = argparse.ArgumentParser(description="Run MultipleSAT with Order Encoding.")
-    parser.add_argument("--input", type=str, default="input/small_instances/bcspwr01.mtx.rnd")
-    parser.add_argument("--timeout", type=float, default=60.0)
-    args = parser.parse_args()
+    test_file = os.path.join(PROJECT_ROOT, "input/small_instances/bcspwr01.mtx.rnd")
+    n, edges = load_hb_file(test_file)
+    lb_map = load_lb_mapping()
+    stem = get_instance_stem(test_file)
+    lb = lookup_lb(stem, lb_map)
 
-    lb_map = load_lower_bounds()
-    result = solve_file(args.input, lb_map, timeout=args.timeout)
-    print("Result:", result)
+    print(f"Testing MultipleSAT on {stem} (n={n}, m={len(edges)}, lb={lb})...")
+    res = solve(n, edges, time_limit=60, lower_bound=lb)
+    print("Result:", res)
