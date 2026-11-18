@@ -32,6 +32,7 @@ class OrderEncoder:
         use_strengthening: bool = True,
         use_symmetry_breaking: bool = True,
         use_degree_bounds: bool = True,
+        amo_encoding: str = "seqcounter",
     ):
         """
         Initialize the OrderEncoder.
@@ -41,11 +42,13 @@ class OrderEncoder:
         :param use_strengthening: Whether to add propagation-strengthening resolvents.
         :param use_symmetry_breaking: Whether to add global reflection symmetry breaking.
         :param use_degree_bounds: Whether to prune boundaries for high-degree vertices.
+        :param amo_encoding: AMO constraint encoding for positions ('seqcounter' [default] or 'pairwise').
         """
         self.n = n
         self.use_strengthening = use_strengthening
         self.use_symmetry_breaking = use_symmetry_breaking
         self.use_degree_bounds = use_degree_bounds
+        self.amo_encoding = amo_encoding.lower()
 
         # Detect 0-indexed vs 1-indexed:
         # If any endpoint is 0 or all endpoints <= n-1, normalize to 1-indexed (1..n) internally
@@ -78,9 +81,15 @@ class OrderEncoder:
         # Variable mapping:
         # 1. Order variables: O(v, t) for v in 1..n, t in 2..n -> Count = n * (n - 1)
         # 2. Exact variables: X(v, a) for v in 1..n, a in 1..n -> Count = n * n
+        # 3. Sequential Counter Aux variables: S(i, a) for i in 1..n-1, a in 1..n -> Count = n * (n - 1)
         self.num_order_vars = n * (n - 1)
         self.num_exact_vars = n * n
-        self.total_vars = self.num_order_vars + self.num_exact_vars
+        if self.amo_encoding == "seqcounter":
+            self.num_aux_vars = n * (n - 1)
+        else:
+            self.num_aux_vars = 0
+
+        self.total_vars = self.num_order_vars + self.num_exact_vars + self.num_aux_vars
 
         self._base_clauses: Optional[List[List[int]]] = None
 
@@ -101,6 +110,16 @@ class OrderEncoder:
         if not (1 <= v <= self.n and 1 <= a <= self.n):
             raise ValueError(f"Invalid indices for X(v={v}, a={a}) with n={self.n}")
         return self.num_order_vars + (v - 1) * self.n + a
+
+    def var_S(self, i: int, a: int) -> int:
+        """
+        DIMACS ID for Sequential Counter auxiliary variable S(i, a).
+        Semantics: S(i, a) <=> exists j <= i such that X(j, a) is True.
+        Valid for i in 1..n-1, a in 1..n.
+        """
+        if not (1 <= i <= self.n - 1 and 1 <= a <= self.n):
+            raise ValueError(f"Invalid indices for S(i={i}, a={a}) with n={self.n}")
+        return self.num_order_vars + self.num_exact_vars + (a - 1) * (self.n - 1) + i
 
     def get_base_clauses(self) -> List[List[int]]:
         """
@@ -145,11 +164,27 @@ class OrderEncoder:
         for a in range(1, n + 1):
             clauses.append([self.var_X(v, a) for v in range(1, n + 1)])
 
-        # AMO on positions (pairwise)
-        for a in range(1, n + 1):
-            for u in range(1, n + 1):
-                for v in range(u + 1, n + 1):
-                    clauses.append([-self.var_X(u, a), -self.var_X(v, a)])
+        # AMO on positions: for each position a, at most one vertex is assigned
+        if self.amo_encoding == "seqcounter":
+            # Sinz (2005) Sequential Counter AMO: 3n - 4 clauses per position => O(n^2) total
+            for a in range(1, n + 1):
+                # i = 1: X(1, a) => S(1, a)
+                clauses.append([-self.var_X(1, a), self.var_S(1, a)])
+                for i in range(2, n):
+                    # X(i, a) => S(i, a)
+                    clauses.append([-self.var_X(i, a), self.var_S(i, a)])
+                    # S(i-1, a) => S(i, a)
+                    clauses.append([-self.var_S(i - 1, a), self.var_S(i, a)])
+                    # S(i-1, a) => ~X(i, a)
+                    clauses.append([-self.var_S(i - 1, a), -self.var_X(i, a)])
+                # i = n: S(n-1, a) => ~X(n, a)
+                clauses.append([-self.var_S(n - 1, a), -self.var_X(n, a)])
+        else:
+            # Pairwise AMO: n(n-1)/2 clauses per position => O(n^3) total
+            for a in range(1, n + 1):
+                for u in range(1, n + 1):
+                    for v in range(u + 1, n + 1):
+                        clauses.append([-self.var_X(u, a), -self.var_X(v, a)])
 
         # 4. Global Reflection Symmetry Breaking:
         # For anchor vertex a_v: f(a_v) <= ceil(n/2)

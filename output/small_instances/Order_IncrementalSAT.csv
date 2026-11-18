@@ -1,3 +1,4 @@
 instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
 bcspwr01,39,46,5,Order IncrementalSAT,5,0.0626,0.2574
 ibm32,32,90,11,Order IncrementalSAT,11,0.0729,0.2078
+bcspwr01,39,46,5,Order IncrementalSAT,5,0.0291,0.0334
