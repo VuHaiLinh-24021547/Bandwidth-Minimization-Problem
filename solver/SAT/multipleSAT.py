@@ -6,13 +6,14 @@ For each candidate bandwidth k, a new SAT formula and solver instance are create
 
 Requirements adherence:
 - Uses time.perf_counter() to measure encoding_time and solve_stime.
-- Supports timeout interruption if encoding or solving exceeds limit.
-- Formats output according to requirements.md.
+- Supports timeout interruption if encoding or solving exceeds limit (via threading.Timer & solver.interrupt).
+- Formats output according to requirements.md: instance, n, edges, lb, encoding_time, solve_stime.
 """
 
 import sys
 import os
 import time
+import threading
 from typing import Dict, Any, Optional
 
 # Ensure project root is in sys.path
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from encoder.order import OrderEncoder
 from utils import load_instance, load_lower_bounds, write_result_csv
-from pysat.solvers import Cadical195
+from pysat.solvers import Glucose4, Solver
 
 
 class MultipleSATSolver:
@@ -35,7 +36,7 @@ class MultipleSATSolver:
         lb: int = 1,
         ub: Optional[int] = None,
         timeout: float = 300.0,
-        solver_name: str = "cadical195"
+        solver_name: str = "glucose4"
     ):
         self.n = n
         self.edges = edges
@@ -47,7 +48,7 @@ class MultipleSATSolver:
     def solve(self) -> Dict[str, Any]:
         """
         Execute Binary Search to find the minimum bandwidth.
-        Tracks encoding_time and solve_stime with timeout guard.
+        Tracks encoding_time and solve_stime with timeout interruption guard.
         """
         total_encoding_time = 0.0
         total_solve_time = 0.0
@@ -63,18 +64,20 @@ class MultipleSATSolver:
 
         # Quick check if low >= high
         if low >= high:
-            # Test low directly
             clauses, enc_t = self._timed_encode(encoder, low)
             total_encoding_time += enc_t
-            sat, model, s_t = self._timed_solve(clauses)
+            rem = max(0.01, self.timeout - (time.perf_counter() - start_wall_time))
+            sat, model, s_t = self._timed_solve(clauses, rem)
             total_solve_time += s_t
-            if sat:
+            if sat is True:
                 best_bw = low
                 best_labeling = encoder.decode(model)
                 status = "OPTIMAL"
-            else:
+            elif sat is False:
                 best_bw = high
                 status = "INFEASIBLE_LB"
+            else:
+                status = "TIMEOUT"
             return {
                 "opt_bandwidth": best_bw,
                 "encoding_time": total_encoding_time,
@@ -92,44 +95,41 @@ class MultipleSATSolver:
 
             mid = (low + high) // 2
 
-            # 1. Encoding
-            clauses, enc_t = self._timed_encode(encoder, mid)
+            # 1. Encoding with timeout guard
+            t_enc0 = time.perf_counter()
+            clauses = encoder.encode(mid)
+            enc_t = time.perf_counter() - t_enc0
             total_encoding_time += enc_t
 
-            # Timeout check post-encoding
-            if (time.perf_counter() - start_wall_time) >= self.timeout:
+            elapsed = time.perf_counter() - start_wall_time
+            if elapsed >= self.timeout:
                 status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
                 break
 
-            # 2. Solving
-            remaining_time = max(0.1, self.timeout - (time.perf_counter() - start_wall_time))
-            sat, model, s_t = self._timed_solve(clauses)
+            # 2. Solving with timeout guard
+            remaining_time = max(0.01, self.timeout - elapsed)
+            sat, model, s_t = self._timed_solve(clauses, remaining_time)
             total_solve_time += s_t
 
-            if (time.perf_counter() - start_wall_time) >= self.timeout:
-                if sat:
-                    labeling = encoder.decode(model)
-                    actual_bw = encoder.compute_bandwidth(labeling)
-                    if actual_bw <= best_bw:
-                        best_bw = actual_bw
-                        best_labeling = labeling
+            if sat is None or (time.perf_counter() - start_wall_time) >= self.timeout:
+                # Interrupted due to timeout
                 status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
                 break
 
-            if sat:
+            if sat is True:
                 labeling = encoder.decode(model)
                 actual_bw = encoder.compute_bandwidth(labeling)
-                if actual_bw < best_bw:
+                if actual_bw <= best_bw:
                     best_bw = actual_bw
                     best_labeling = labeling
-                # Since mid is feasible, upper bound can be tightened
+                # Tighten upper bound
                 high = min(mid - 1, actual_bw - 1)
                 status = "OPTIMAL"
             else:
                 # mid is infeasible
                 low = mid + 1
 
-        if low > high and status != "TIMEOUT":
+        if low > high and status != "TIMEOUT" and status != "FEASIBLE":
             status = "OPTIMAL"
 
         return {
@@ -146,21 +146,26 @@ class MultipleSATSolver:
         t_enc = time.perf_counter() - t0
         return clauses, t_enc
 
-    def _timed_solve(self, clauses: list):
+    def _timed_solve(self, clauses: list, timeout_sec: float):
         t0 = time.perf_counter()
-        solver = Cadical195(bootstrap_with=clauses)
-        sat = solver.solve()
-        model = solver.get_model() if sat else None
-        s_t = time.perf_counter() - t0
-        solver.delete()
+        solver = Solver(name=self.solver_name, bootstrap_with=clauses)
+        timer = threading.Timer(timeout_sec, solver.interrupt)
+        timer.start()
+        try:
+            sat = solver.solve_limited(expect_interrupt=True)
+            model = solver.get_model() if sat is True else None
+        finally:
+            timer.cancel()
+            s_t = time.perf_counter() - t0
+            solver.delete()
         return sat, model, s_t
 
 
-def solve_file(file_path: str, lb_map: dict, timeout: float = 300.0) -> Dict[str, Any]:
+def solve_file(file_path: str, lb_map: dict, timeout: float = 300.0, solver_name: str = "glucose4") -> Dict[str, Any]:
     inst_name, n, m, edges = load_instance(file_path)
     lb = lb_map.get(inst_name, 1)
 
-    solver = MultipleSATSolver(n=n, edges=edges, lb=lb, timeout=timeout)
+    solver = MultipleSATSolver(n=n, edges=edges, lb=lb, timeout=timeout, solver_name=solver_name)
     res = solver.solve()
 
     return {
@@ -178,7 +183,6 @@ def solve_file(file_path: str, lb_map: dict, timeout: float = 300.0) -> Dict[str
 
 if __name__ == "__main__":
     import argparse
-    import glob
 
     parser = argparse.ArgumentParser(description="Run MultipleSAT with Order Encoding.")
     parser.add_argument("--input", type=str, default="input/small_instances/bcspwr01.mtx.rnd")

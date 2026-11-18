@@ -11,16 +11,16 @@ from utils import load_lower_bounds, write_result_csv
 from solver.SAT.multipleSAT import solve_file as solve_multiple
 from solver.SAT.incrementalSAT import solve_file as solve_incremental
 
-def run_benchmarks(instances, timeout=60.0):
+def run_benchmarks(instances, timeout=10.0):
     lb_map = load_lower_bounds("input/lb.csv")
     
     multiple_results = []
     incremental_results = []
     
     print(f"Running benchmarks on {len(instances)} instances (timeout={timeout}s)...")
-    print("-" * 80)
-    print(f"{'Instance':<12} | {'n':<4} | {'m':<5} | {'LB':<4} | {'Mult BW':<8} {'Time(s)':<8} | {'Incr BW':<8} {'Time(s)':<8}")
-    print("-" * 80)
+    print("-" * 88)
+    print(f"{'Instance':<12} | {'n':<4} | {'m':<5} | {'LB':<4} | {'Mult BW':<8} {'Status':<8} {'Time(s)':<8} | {'Incr BW':<8} {'Status':<8} {'Time(s)':<8}")
+    print("-" * 88)
     
     for f in instances:
         inst_name = os.path.basename(f).replace(".mtx.rnd", "").replace(".mtx", "")
@@ -36,21 +36,19 @@ def run_benchmarks(instances, timeout=60.0):
         t_i = res_i["encoding_time"] + res_i["solve_stime"]
         
         print(f"{inst_name:<12} | {res_m['n']:<4} | {res_m['edges']:<5} | {res_m['lb']:<4} | "
-              f"{res_m['bandwidth']:<8} {t_m:<8.2f} | {res_i['bandwidth']:<8} {t_i:<8.2f}")
+              f"{res_m['bandwidth']:<8} {res_m['status']:<8} {t_m:<8.2f} | "
+              f"{res_i['bandwidth']:<8} {res_i['status']:<8} {t_i:<8.2f}")
 
     # Write output CSVs
     write_result_csv("results_multiple_sat.csv", multiple_results)
     write_result_csv("results_incremental_sat.csv", incremental_results)
-    print("-" * 80)
+    print("-" * 88)
     print("Results saved to results_multiple_sat.csv and results_incremental_sat.csv")
     return multiple_results, incremental_results
 
 if __name__ == "__main__":
-    # Select small instances sorted by vertex count n
-    import re
     all_small = glob.glob("input/small_instances/*.mtx.rnd")
     
-    # Sort by n
     def get_n(f):
         with open(f, 'r') as fp:
             for line in fp:
@@ -61,5 +59,5 @@ if __name__ == "__main__":
         
     all_small.sort(key=get_n)
     
-    # Run first 10 small instances
-    run_benchmarks(all_small[:10], timeout=60.0)
+    # Run on the 10 smallest instances with 15s timeout
+    run_benchmarks(all_small[:10], timeout=15.0)

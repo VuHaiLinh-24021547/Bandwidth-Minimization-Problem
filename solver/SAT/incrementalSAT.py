@@ -13,13 +13,14 @@ Theoretical framework:
 
 Requirements adherence:
 - Uses time.perf_counter() for encoding_time and solve_stime.
-- Timeout interruption guard.
-- Output formatting conforms to requirements.md.
+- Timeout interruption guard via threading.Timer and solver.interrupt.
+- Output formatting conforms to requirements.md: instance, n, edges, lb, encoding_time, solve_stime.
 """
 
 import sys
 import os
 import time
+import threading
 from typing import Dict, Any, Optional
 
 # Ensure project root is in sys.path
@@ -27,7 +28,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from encoder.order import OrderEncoder
 from utils import load_instance, load_lower_bounds, write_result_csv
-from pysat.solvers import Cadical195
+from pysat.solvers import Glucose4, Solver
 
 
 class IncrementalSATSolver:
@@ -42,7 +43,7 @@ class IncrementalSATSolver:
         lb: int = 1,
         ub: Optional[int] = None,
         timeout: float = 300.0,
-        solver_name: str = "cadical195"
+        solver_name: str = "glucose4"
     ):
         self.n = n
         self.edges = edges
@@ -67,7 +68,7 @@ class IncrementalSATSolver:
         total_encoding_time += enc_base_time
 
         # Step 2: Initialize persistent SAT solver
-        solver = Cadical195(bootstrap_with=base_clauses)
+        solver = Solver(name=self.solver_name, bootstrap_with=base_clauses)
 
         k = self.ub
         best_bw = self.ub
@@ -77,7 +78,8 @@ class IncrementalSATSolver:
         try:
             while k >= 1:
                 # Check global timeout
-                if (time.perf_counter() - start_wall_time) >= self.timeout:
+                elapsed = time.perf_counter() - start_wall_time
+                if elapsed >= self.timeout:
                     status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
                     break
 
@@ -88,28 +90,32 @@ class IncrementalSATSolver:
                     solver.add_clause(cl)
                 total_encoding_time += (time.perf_counter() - t_delta)
 
-                if (time.perf_counter() - start_wall_time) >= self.timeout:
+                elapsed = time.perf_counter() - start_wall_time
+                if elapsed >= self.timeout:
                     status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
                     break
 
-                # Step 4: Solve with persistent state
+                # Step 4: Solve with persistent state and timeout guard
+                remaining_time = max(0.01, self.timeout - elapsed)
+                timer = threading.Timer(remaining_time, solver.interrupt)
+                timer.start()
+
                 t_s = time.perf_counter()
-                sat = solver.solve()
-                s_t = time.perf_counter() - t_s
-                total_solve_time += s_t
+                sat = None
+                try:
+                    sat = solver.solve_limited(expect_interrupt=True)
+                finally:
+                    timer.cancel()
+                    solver.clear_interrupt()
+                    s_t = time.perf_counter() - t_s
+                    total_solve_time += s_t
 
-                if (time.perf_counter() - start_wall_time) >= self.timeout:
-                    if sat:
-                        model = solver.get_model()
-                        labeling = encoder.decode(model)
-                        actual_bw = encoder.compute_bandwidth(labeling)
-                        if actual_bw <= best_bw:
-                            best_bw = actual_bw
-                            best_labeling = labeling
+                if sat is None or (time.perf_counter() - start_wall_time) >= self.timeout:
+                    # Timeout reached
                     status = "TIMEOUT" if best_labeling is None else "FEASIBLE"
                     break
 
-                if sat:
+                if sat is True:
                     model = solver.get_model()
                     labeling = encoder.decode(model)
                     actual_bw = encoder.compute_bandwidth(labeling)
@@ -126,7 +132,7 @@ class IncrementalSATSolver:
                     # Smart jump: jump directly to best_bw - 1
                     k = best_bw - 1
                 else:
-                    # k is UNSAT, therefore best_bw (which is k + 1 or previous feasible) is certified OPTIMAL!
+                    # k is UNSAT, therefore best_bw is certified OPTIMAL!
                     status = "OPTIMAL"
                     break
 
@@ -145,11 +151,11 @@ class IncrementalSATSolver:
         }
 
 
-def solve_file(file_path: str, lb_map: dict, timeout: float = 300.0) -> Dict[str, Any]:
+def solve_file(file_path: str, lb_map: dict, timeout: float = 300.0, solver_name: str = "glucose4") -> Dict[str, Any]:
     inst_name, n, m, edges = load_instance(file_path)
     lb = lb_map.get(inst_name, 1)
 
-    solver = IncrementalSATSolver(n=n, edges=edges, lb=lb, timeout=timeout)
+    solver = IncrementalSATSolver(n=n, edges=edges, lb=lb, timeout=timeout, solver_name=solver_name)
     res = solver.solve()
 
     return {

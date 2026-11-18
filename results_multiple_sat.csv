@@ -1,0 +1,11 @@
+instance,n,edges,lb,encoding_time,solve_stime,bandwidth,status,solver
+pores_1,30,103,7,0.0214,0.051,7,OPTIMAL,MultipleSAT_Order
+ibm32,32,90,11,0.0272,0.0831,11,OPTIMAL,MultipleSAT_Order
+bcspwr01,39,46,5,0.0729,4.6387,5,OPTIMAL,MultipleSAT_Order
+bcsstk01,48,176,16,0.2401,14.7763,19,FEASIBLE,MultipleSAT_Order
+bcspwr02,49,59,7,0.1738,0.6918,7,OPTIMAL,MultipleSAT_Order
+curtis54,54,124,10,0.1664,26.4477,31,FEASIBLE,MultipleSAT_Order
+will57,57,127,6,0.1796,16.8201,31,FEASIBLE,MultipleSAT_Order
+impcol_b,59,281,19,0.4797,14.8447,23,FEASIBLE,MultipleSAT_Order
+steam3,80,424,7,0.5176,25.1599,79,TIMEOUT,MultipleSAT_Order
+ash85,85,219,9,0.6904,22.7462,46,FEASIBLE,MultipleSAT_Order
