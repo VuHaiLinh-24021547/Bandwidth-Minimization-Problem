@@ -1,16 +1,3 @@
-"""
-Usage
------
-    # Run on a specific input file with a 120-second time limit:
-    python main.py --file input/small_instances/arc130.mtx.rnd --time-limit 120
-
-    # Custom CSV output path:
-    python main.py --file input/small_instances/arc130.mtx.rnd --csv my_results.csv
-
-    # Run only specific solvers:
-    python main.py --file input/small_instances/arc130.mtx.rnd --solvers ortools cplex_cp
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -20,8 +7,12 @@ import os
 import sys
 from typing import Dict, List, Optional
 
-from hb_parser import load_hb_file
-from lb_loader import (
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from utils.hb_parser import load_hb_file
+from utils.lb_loader import (
     compute_original_bandwidth,
     get_instance_category,
     get_instance_stem,
@@ -140,7 +131,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir", "-o",
         type=str,
-        default="output",
+        default=os.path.join(PROJECT_ROOT, "output"),
         help="Output folder path where category folders are stored (default: output).",
     )
     parser.add_argument(
@@ -151,7 +142,7 @@ def main() -> None:
     parser.add_argument(
         "--lb-csv",
         type=str,
-        default=os.path.join("input", "lb.csv"),
+        default=os.path.join(PROJECT_ROOT, "input", "lb.csv"),
         help="Path to CSV containing precomputed lower bounds (default: input/lb.csv).",
     )
     args = parser.parse_args()
@@ -160,9 +151,9 @@ def main() -> None:
     if args.file is not None:
         filepath = args.file
     else:
-        filepath = os.path.join("input", "small_instances", "bcspwr01.mtx.rnd")
+        filepath = os.path.join(PROJECT_ROOT, "input", "small_instances", "bcspwr01.mtx.rnd")
         if not os.path.exists(filepath):
-            candidates = glob.glob(os.path.join("input", "**", "*.mtx.rnd"), recursive=True)
+            candidates = glob.glob(os.path.join(PROJECT_ROOT, "input", "**", "*.mtx.rnd"), recursive=True)
             if candidates:
                 filepath = candidates[0]
             else:
@@ -225,7 +216,6 @@ def main() -> None:
         print(f" Done. BW={bw_str}, Enc={enc_str}, Sol={sol_str}")
         print()
 
-    # ---- Print summary table ----
     print(format_results_table(n, len(edges), original_bw, results, lb=lb))
 
     # ---- Export to Category CSV ----

@@ -1,14 +1,3 @@
-"""
-Options:
-  --input-dir    Directory containing instance files (default: input)
-  --output-dir   Directory where category folders will be saved (default: output)
-  --category     Run only 'small_instances', 'large_instances', or 'all' (default: all)
-  --time-limit   Time limit per solver execution in seconds (default: 120)
-  --solvers      Specific solvers to run (default: cplex_cp cplex_mip ortools gurobi)
-  --instances    Optional list of specific instance names or patterns to run
-  --lb-csv       Path to CSV containing precomputed lower bounds (default: input/lb.csv)
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -19,8 +8,12 @@ import sys
 import time
 from typing import Dict, List, Optional, Tuple
 
-from hb_parser import load_hb_file
-from lb_loader import (
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from utils.hb_parser import load_hb_file
+from utils.lb_loader import (
     compute_original_bandwidth,
     get_instance_category,
     get_instance_stem,
@@ -97,13 +90,13 @@ def run_benchmark():
     parser.add_argument(
         "--input-dir", "-i",
         type=str,
-        default="input",
+        default=os.path.join(PROJECT_ROOT, "input"),
         help="Input folder path containing instance files (default: input)",
     )
     parser.add_argument(
         "--output-dir", "-o",
         type=str,
-        default="output",
+        default=os.path.join(PROJECT_ROOT, "output"),
         help="Output folder path where category folders will be stored (default: output)",
     )
     parser.add_argument(
@@ -135,7 +128,7 @@ def run_benchmark():
     parser.add_argument(
         "--lb-csv",
         type=str,
-        default=os.path.join("input", "lb.csv"),
+        default=os.path.join(PROJECT_ROOT, "input", "lb.csv"),
         help="Path to CSV containing precomputed lower bounds (default: input/lb.csv)",
     )
     args = parser.parse_args()
