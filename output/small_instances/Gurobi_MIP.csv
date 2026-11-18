@@ -1,2 +1,2 @@
 instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
-arc130,130,715,63,Gurobi MIP,125,0.1851,0.2966
+arc130,130,715,63,Gurobi MIP,67,0.9009,4.984

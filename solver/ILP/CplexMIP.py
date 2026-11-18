@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 def solve(
     n: int,
     edges: List[Tuple[int, int]],
-    time_limit: int = 60,
+    time_limit: int = 120,
     lower_bound: Optional[int] = None,
 ) -> Dict:
     from docplex.mp.model import Model
