@@ -1,0 +1,18 @@
+# Reference documents (Tài liệu tham khảo)
+Tài liệu/
+Tài liệu/**
+*.pdf
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Outputs and logs
+*.csv.tmp
+*.log
