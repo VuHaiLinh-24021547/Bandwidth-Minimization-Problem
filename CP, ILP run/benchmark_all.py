@@ -50,6 +50,18 @@ def get_solver_registry() -> Dict[str, Tuple[str, any]]:
     except Exception:
         registry["gurobi"] = ("Gurobi MIP", None)
 
+    try:
+        from solver.SAT import multipleSAT
+        registry["order_multiple_sat"] = ("Order MultipleSAT", multipleSAT.solve)
+    except Exception:
+        registry["order_multiple_sat"] = ("Order MultipleSAT", None)
+
+    try:
+        from solver.SAT import incrementalSAT
+        registry["order_incremental_sat"] = ("Order IncrementalSAT", incrementalSAT.solve)
+    except Exception:
+        registry["order_incremental_sat"] = ("Order IncrementalSAT", None)
+
     return registry
 
 
@@ -115,7 +127,7 @@ def run_benchmark():
     parser.add_argument(
         "--solvers", "-s",
         nargs="+",
-        choices=["cplex_cp", "cplex_mip", "ortools", "gurobi"],
+        choices=["cplex_cp", "cplex_mip", "ortools", "gurobi", "order_multiple_sat", "order_incremental_sat"],
         default=["cplex_cp", "cplex_mip", "ortools", "gurobi"],
         help="Solvers to benchmark (default: all)",
     )
