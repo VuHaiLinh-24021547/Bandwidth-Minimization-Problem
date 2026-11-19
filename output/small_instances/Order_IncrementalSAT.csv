@@ -1,4 +1,11 @@
 instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
-bcspwr01,39,46,5,Order IncrementalSAT,5,0.0626,0.2574
-ibm32,32,90,11,Order IncrementalSAT,11,0.0729,0.2078
-bcspwr01,39,46,5,Order IncrementalSAT,5,0.0291,0.0334
+pores_1,30,103,7,Order IncrementalSAT,7,0.0354,0.0078
+ibm32,32,90,11,Order IncrementalSAT,11,0.0238,0.4750
+bcspwr01,39,46,5,Order IncrementalSAT,5,0.0282,0.0280
+bcsstk01,48,176,16,Order IncrementalSAT,16,0.2300,6.1019
+bcspwr02,49,59,7,Order IncrementalSAT,7,0.0658,0.0991
+curtis54,54,124,10,Order IncrementalSAT,10,0.0890,0.8590
+will57,57,127,6,Order IncrementalSAT,6,0.2123,10.7999
+impcol_b,59,281,19,Order IncrementalSAT,22,0.6374,15.3655
+steam3,80,424,7,Order IncrementalSAT,7,0.0004,0.0000
+ash85,85,219,9,Order IncrementalSAT,15,0.1743,15.3799

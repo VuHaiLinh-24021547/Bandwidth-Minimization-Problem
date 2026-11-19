@@ -1,14 +1,3 @@
-"""
-Multiple (Non-Incremental) SAT Solver for Bandwidth Minimization Problem (BMP)
------------------------------------------------------------------------------
-Uses Order Encoding to solve BMP via Binary Search over bandwidth bounds [LB, UB].
-For each candidate bandwidth k, a fresh SAT formula and solver instance are created.
-
-Conforms to standard solver interface:
-    solve(n, edges, time_limit=60, lower_bound=None) -> Dict
-Compatible with main.py, benchmark_all.py, and requirements.md.
-"""
-
 from __future__ import annotations
 
 import os
@@ -17,7 +6,6 @@ import time
 import threading
 from typing import Dict, List, Optional, Tuple
 
-# Ensure project root is in sys.path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -25,17 +13,20 @@ if PROJECT_ROOT not in sys.path:
 from encoder.order import OrderEncoder
 from pysat.solvers import Solver
 
+try:
+    import scipy.sparse as sp
+    import scipy.sparse.csgraph as csg
+    import numpy as np
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
 
 def get_rcm_upper_bound(n: int, edges: List[Tuple[int, int]]) -> Tuple[int, List[int]]:
-    """
-    Compute an initial upper bound and permutation using the Reverse Cuthill-McKee (RCM) heuristic.
-    Runs in O(|V| + |E|) time (< 1 ms).
-    """
+    """Compute initial upper bound and permutation using Reverse Cuthill-McKee heuristic."""
+    if not HAS_SCIPY or not edges:
+        return n - 1, list(range(n))
     try:
-        import scipy.sparse as sp
-        import scipy.sparse.csgraph as csg
-        import numpy as np
-
         row = [u for u, v in edges]
         col = [v for u, v in edges]
         data = np.ones(len(edges), dtype=int)
@@ -57,23 +48,14 @@ def solve(
     lower_bound: Optional[int] = None,
     solver_name: str = "glucose4",
 ) -> Dict:
-    """
-    Standard solver entry point for MultipleSAT with Order Encoding.
-
-    :param n: Number of vertices (0-indexed or 1-indexed).
-    :param edges: List of undirected edge tuples.
-    :param time_limit: Wall-clock timeout in seconds.
-    :param lower_bound: Optional theoretical lower bound (e.g. from lb.csv).
-    :param solver_name: Underlying PySAT solver backend (default: glucose4).
-    :return: Dictionary containing solver metrics and permutation.
-    """
+    """Solve BMP using binary search over bandwidth with independent SAT instances."""
     total_encoding_time = 0.0
     total_solve_time = 0.0
     start_wall_time = time.perf_counter()
 
     lb = max(1, lower_bound) if lower_bound is not None and lower_bound > 0 else 1
 
-    # Heuristic initial upper bound via RCM
+    # Initial upper bound via RCM
     t_rcm0 = time.perf_counter()
     rcm_bw, rcm_perm = get_rcm_upper_bound(n, edges)
     total_encoding_time += (time.perf_counter() - t_rcm0)
@@ -82,7 +64,7 @@ def solve(
     best_perm = rcm_perm
     status = "Feasible"
 
-    # Early exit if heuristic matches lower bound
+    # Early exit if lower bound is already reached
     if best_bw <= lb:
         return {
             "solver": "Order MultipleSAT",
@@ -106,7 +88,7 @@ def solve(
 
         mid = (low + high) // 2
 
-        # 1. Encoding
+        # Encode for bandwidth mid
         t_enc0 = time.perf_counter()
         clauses = encoder.encode(mid)
         enc_t = time.perf_counter() - t_enc0
@@ -117,7 +99,7 @@ def solve(
             status = "TimeLimitReached"
             break
 
-        # 2. Solving with timeout guard
+        # Solve with timeout guard
         remaining_time = max(0.01, float(time_limit) - elapsed)
         t_s0 = time.perf_counter()
         solver = Solver(name=solver_name, bootstrap_with=clauses)
@@ -142,7 +124,6 @@ def solve(
 
         if sat is True:
             perm = encoder.decode_permutation(model)
-            # encoder.edges are always 1-based internally, so index with u-1, v-1
             actual_bw = max(
                 abs(perm[u - 1] - perm[v - 1])
                 for u, v in encoder.edges
