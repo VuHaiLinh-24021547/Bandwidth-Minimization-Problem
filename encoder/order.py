@@ -14,6 +14,7 @@ class OrderEncoder:
         use_strengthening: bool = True,
         use_symmetry_breaking: bool = True,
         use_degree_bounds: bool = True,
+        use_2hop: bool = True,
         amo_encoding: str = "seqcounter",
     ):
         """
@@ -24,12 +25,14 @@ class OrderEncoder:
         :param use_strengthening: Whether to add resolvents between exact and order variables.
         :param use_symmetry_breaking: Whether to add reflection symmetry breaking.
         :param use_degree_bounds: Whether to prune boundaries for high-degree vertices.
+        :param use_2hop: Whether to add 2-hop distance bound constraints.
         :param amo_encoding: AMO constraint encoding ('seqcounter' or 'pairwise').
         """
         self.n = n
         self.use_strengthening = use_strengthening
         self.use_symmetry_breaking = use_symmetry_breaking
         self.use_degree_bounds = use_degree_bounds
+        self.use_2hop = use_2hop
         self.amo_encoding = amo_encoding.lower()
 
         # Normalize 0-indexed edges to 1-indexed (1..n) internally
@@ -54,6 +57,22 @@ class OrderEncoder:
                     self.degrees[v_norm] += 1
 
         self.edges: List[Tuple[int, int]] = sorted(list(norm_edges))
+
+        # Adjacency and 2-hop neighbor pairs (d_G(u, v) == 2)
+        adj = [set() for _ in range(n + 1)]
+        for u, v in self.edges:
+            adj[u].add(v)
+            adj[v].add(u)
+        self.adj = adj
+
+        two_hop_set = set()
+        if self.use_2hop:
+            for u in range(1, n + 1):
+                for w in adj[u]:
+                    for v in adj[w]:
+                        if v > u and v not in adj[u]:
+                            two_hop_set.add((u, v))
+        self.two_hop_edges: List[Tuple[int, int]] = sorted(list(two_hop_set))
 
         # Select anchor vertex with maximum degree for symmetry breaking
         self.anchor_vertex = max(range(1, n + 1), key=lambda v: (self.degrees[v], -v))
@@ -179,6 +198,14 @@ class OrderEncoder:
                     if a + k + 1 <= n:
                         clauses.append([-self.var_X(u, a), -self.var_O(v, a + k + 1)])
                         clauses.append([-self.var_X(v, a), -self.var_O(u, a + k + 1)])
+
+        # 2-hop distance bounds for pairs with d_G(u, v) == 2
+        if self.use_2hop and 2 * k < n - 1:
+            two_k = 2 * k
+            for u, v in self.two_hop_edges:
+                for t in range(two_k + 2, n + 1):
+                    clauses.append([-self.var_O(u, t), self.var_O(v, t - two_k)])
+                    clauses.append([-self.var_O(v, t), self.var_O(u, t - two_k)])
 
         return clauses
 

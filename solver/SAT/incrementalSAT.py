@@ -47,6 +47,7 @@ def solve(
     time_limit: int = 60,
     lower_bound: Optional[int] = None,
     solver_name: str = "glucose4",
+    use_2hop: bool = True,
 ) -> Dict:
     """Incremental SAT solver using Order Encoding with descending threshold search."""
     total_encoding_time = 0.0
@@ -77,7 +78,13 @@ def solve(
 
     # Base encoding
     t_enc0 = time.perf_counter()
-    encoder = OrderEncoder(n, edges, use_strengthening=True, use_symmetry_breaking=True)
+    encoder = OrderEncoder(
+        n,
+        edges,
+        use_strengthening=True,
+        use_symmetry_breaking=True,
+        use_2hop=use_2hop,
+    )
     base_clauses = encoder.get_base_clauses()
     total_encoding_time += (time.perf_counter() - t_enc0)
 

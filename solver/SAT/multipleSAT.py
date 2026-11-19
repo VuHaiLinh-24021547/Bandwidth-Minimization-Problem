@@ -47,6 +47,7 @@ def solve(
     time_limit: int = 60,
     lower_bound: Optional[int] = None,
     solver_name: str = "glucose4",
+    use_2hop: bool = True,
 ) -> Dict:
     """Solve BMP using binary search over bandwidth with independent SAT instances."""
     total_encoding_time = 0.0
@@ -75,7 +76,13 @@ def solve(
             "solve_time": 0.0,
         }
 
-    encoder = OrderEncoder(n, edges, use_strengthening=True, use_symmetry_breaking=True)
+    encoder = OrderEncoder(
+        n,
+        edges,
+        use_strengthening=True,
+        use_symmetry_breaking=True,
+        use_2hop=use_2hop,
+    )
 
     low = lb
     high = best_bw - 1
