@@ -1,11 +1,11 @@
 instance,n,edges,lb,solver,bandwidth,encoding_time,solve_time
-pores_1,30,103,7,Order MultipleSAT,7,0.0062,0.0068
-ibm32,32,90,11,Order MultipleSAT,11,0.0426,0.2841
-bcspwr01,39,46,5,Order MultipleSAT,5,0.0179,0.0468
-bcsstk01,48,176,16,Order MultipleSAT,16,0.0528,2.6741
-bcspwr02,49,59,7,Order MultipleSAT,7,0.0256,0.0287
-curtis54,54,124,10,Order MultipleSAT,10,0.0386,0.4263
-will57,57,127,6,Order MultipleSAT,6,0.0731,2.0853
-impcol_b,59,281,19,Order MultipleSAT,23,0.0973,14.9351
-steam3,80,424,7,Order MultipleSAT,7,0.0004,0.0000
-ash85,85,219,9,Order MultipleSAT,12,0.1193,15.6058
+pores_1,30,103,7,Order MultipleSAT,7,0.0087,0.0103
+ibm32,32,90,11,Order MultipleSAT,11,0.0133,0.1186
+bcspwr01,39,46,5,Order MultipleSAT,5,0.0156,0.1734
+bcsstk01,48,176,16,Order MultipleSAT,16,0.0787,1.6415
+bcspwr02,49,59,7,Order MultipleSAT,7,0.0357,0.1211
+curtis54,54,124,10,Order MultipleSAT,10,0.0996,4.0620
+will57,57,127,6,Order MultipleSAT,6,0.2728,10.1832
+impcol_b,59,281,19,Order MultipleSAT,23,0.4141,14.9158
+steam3,80,424,7,Order MultipleSAT,7,0.0015,0.0000
+ash85,85,219,9,Order MultipleSAT,9,0.8959,11.9206
