@@ -163,7 +163,11 @@ class OrderEncoder:
         self._base_clauses = clauses
         return clauses
 
-    def get_bandwidth_clauses(self, k: int) -> List[List[int]]:
+    def get_bandwidth_clauses(
+        self,
+        k: int,
+        act_var: Optional[int] = None,
+    ) -> List[List[int]]:
         """Construct clauses enforcing |f(u) - f(v)| <= k for all edges (u, v)."""
         clauses: List[List[int]] = []
         n = self.n
@@ -206,6 +210,10 @@ class OrderEncoder:
                 for t in range(two_k + 2, n + 1):
                     clauses.append([-self.var_O(u, t), self.var_O(v, t - two_k)])
                     clauses.append([-self.var_O(v, t), self.var_O(u, t - two_k)])
+
+        if act_var is not None:
+            neg_act = -act_var
+            return [[neg_act, *cl] for cl in clauses]
 
         return clauses
 
