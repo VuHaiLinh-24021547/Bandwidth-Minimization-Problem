@@ -89,30 +89,6 @@ def solve(
             "solve_time": 0.0,
         }
 
-    t_enc0 = time.perf_counter()
-    try:
-        encoder = OrderEncoder(
-            n,
-            edges,
-            use_strengthening=use_strengthening,
-            use_symmetry_breaking=use_symmetry_breaking,
-            use_degree_bounds=use_degree_bounds,
-            use_2hop=use_2hop,
-            amo_encoding=amo_encoding,
-        )
-        base_clauses = encoder.get_base_clauses(deadline=deadline)
-    except TimeoutError:
-        total_encoding_time += time.perf_counter() - t_enc0
-        return {
-            "solver": "Order IncrementalSAT",
-            "status": "TimeLimitReached",
-            "bandwidth": best_bw,
-            "permutation": best_perm,
-            "encoding_time": total_encoding_time,
-            "solve_time": 0.0,
-        }
-    total_encoding_time += time.perf_counter() - t_enc0
-
     if time.perf_counter() >= deadline:
         return {
             "solver": "Order IncrementalSAT",
@@ -123,11 +99,32 @@ def solve(
             "solve_time": 0.0,
         }
 
-    t_boot0 = time.perf_counter()
-    solver = Solver(name=solver_name, bootstrap_with=base_clauses)
-    total_encoding_time += time.perf_counter() - t_boot0
-
+    solver = Solver(name=solver_name)
     try:
+        t_enc0 = time.perf_counter()
+        try:
+            encoder = OrderEncoder(
+                n,
+                edges,
+                use_strengthening=use_strengthening,
+                use_symmetry_breaking=use_symmetry_breaking,
+                use_degree_bounds=use_degree_bounds,
+                use_2hop=use_2hop,
+                amo_encoding=amo_encoding,
+            )
+            encoder.add_base_clauses(solver, deadline=deadline)
+        except TimeoutError:
+            total_encoding_time += time.perf_counter() - t_enc0
+            return {
+                "solver": "Order IncrementalSAT",
+                "status": "TimeLimitReached",
+                "bandwidth": best_bw,
+                "permutation": best_perm,
+                "encoding_time": total_encoding_time,
+                "solve_time": 0.0,
+            }
+        total_encoding_time += time.perf_counter() - t_enc0
+
         if search_strategy == "binary":
             next_act_var = encoder.total_vars + 1
             low = lb
@@ -144,8 +141,7 @@ def solve(
 
                 t_delta0 = time.perf_counter()
                 try:
-                    bw_clauses = encoder.get_bandwidth_clauses(mid, act_var=act_var, deadline=deadline)
-                    solver.append_formula(bw_clauses)
+                    encoder.add_bandwidth_clauses(solver, mid, act_var=act_var, deadline=deadline)
                 except TimeoutError:
                     total_encoding_time += time.perf_counter() - t_delta0
                     status = "TimeLimitReached"
@@ -205,8 +201,7 @@ def solve(
 
                 t_delta0 = time.perf_counter()
                 try:
-                    bw_clauses = encoder.get_bandwidth_clauses(k, deadline=deadline)
-                    solver.append_formula(bw_clauses)
+                    encoder.add_bandwidth_clauses(solver, k, deadline=deadline)
                 except TimeoutError:
                     total_encoding_time += time.perf_counter() - t_delta0
                     status = "TimeLimitReached"
