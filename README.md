@@ -9,8 +9,12 @@ Benchmark suite for the Bandwidth Minimization Problem using:
 
 - `CP, ILP run/main.py` — Run solvers on a single sparse-matrix instance.
 - `CP, ILP run/benchmark_all.py` — Batch benchmark across instances in `input/` and export results to `output/`.
-- `encoder/order.py` — Order & Hybrid Encoding into propositional logic CNF with symmetry breaking and degree pruning.
-- `solver/SAT/` — SAT solvers (`multipleSAT.py`, `incrementalSAT.py`).
+- `encoder/order.py` — Dedicated Order & Hybrid Encoding CNF (`OrderEncoder`: Sequential Counter AMO, 2-hop bounds, assumption-guarded thresholds, symmetry breaking & degree pruning).
+- `encoder/pairwise.py` — Dedicated Pairwise Encoding CNF (`PairwiseEncoder`, isolated from Order Encoding).
+- `solver/SAT/` — Strictly separated SAT solvers:
+  - Order Encoding: `orderIncrementalSAT.py`, `orderMultipleSAT.py`.
+  - Pairwise Encoding: `pairwiseIncrementalSAT.py`, `pairwiseMultipleSAT.py`.
+  - Unified routers: `incrementalSAT.py`, `multipleSAT.py`.
 - `solver/CP/` — CP solvers (`CplexCP.py`, `CPSat.py`).
 - `solver/ILP/` — ILP solvers (`CplexMIP.py`, `gurobi.py`).
 - `utils/` — Matrix parser (`hb_parser.py`) and lower-bound / solution verification helpers (`lb_loader.py`).
@@ -28,9 +32,8 @@ python "CP, ILP run/main.py"
 # Run SAT solvers on a specific input file
 python "CP, ILP run/main.py" --file input/small_instances/bcspwr01.mtx.rnd --solvers order_incremental_sat order_multiple_sat
 
-# Run specific solvers (choices: cplex_cp, cplex_mip, ortools, gurobi, order_multiple_sat, order_incremental_sat)
+# Run specific solvers (choices: cplex_cp, cplex_mip, ortools, gurobi, order_multiple_sat, order_incremental_sat, pairwise_multiple_sat, pairwise_incremental_sat)
 python "CP, ILP run/main.py" --file input/small_instances/bcspwr01.mtx.rnd --solvers ortools gurobi order_incremental_sat
-```
 
 # Print results without appending to output CSV files
 python "CP, ILP run/main.py" --file input/small_instances/arc130.mtx.rnd --no-export

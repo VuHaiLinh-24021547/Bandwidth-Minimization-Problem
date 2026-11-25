@@ -124,7 +124,16 @@ def main() -> None:
     parser.add_argument(
         "--solvers", "-s",
         nargs="+",
-        choices=["cplex_cp", "cplex_mip", "ortools", "gurobi", "order_multiple_sat", "order_incremental_sat"],
+        choices=[
+            "cplex_cp",
+            "cplex_mip",
+            "ortools",
+            "gurobi",
+            "order_multiple_sat",
+            "order_incremental_sat",
+            "pairwise_multiple_sat",
+            "pairwise_incremental_sat",
+        ],
         default=["cplex_cp", "cplex_mip", "ortools", "gurobi"],
         help="Which solvers to run (default: CP and ILP solvers).",
     )
@@ -192,11 +201,17 @@ def main() -> None:
         from solver.ILP import gurobi
         registry["Gurobi MIP"] = gurobi.solve
     if "order_multiple_sat" in args.solvers:
-        from solver.SAT import multipleSAT
-        registry["Order MultipleSAT"] = multipleSAT.solve
+        from solver.SAT import orderMultipleSAT
+        registry["Order MultipleSAT"] = orderMultipleSAT.solve
     if "order_incremental_sat" in args.solvers:
-        from solver.SAT import incrementalSAT
-        registry["Order IncrementalSAT"] = incrementalSAT.solve
+        from solver.SAT import orderIncrementalSAT
+        registry["Order IncrementalSAT"] = orderIncrementalSAT.solve
+    if "pairwise_multiple_sat" in args.solvers:
+        from solver.SAT import pairwiseMultipleSAT
+        registry["Pairwise MultipleSAT"] = pairwiseMultipleSAT.solve
+    if "pairwise_incremental_sat" in args.solvers:
+        from solver.SAT import pairwiseIncrementalSAT
+        registry["Pairwise IncrementalSAT"] = pairwiseIncrementalSAT.solve
 
     # ---- Run solvers ----
     results = []
