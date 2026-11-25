@@ -85,42 +85,36 @@ def solve(
 
         mid = (low + high) // 2
 
-        t_enc0 = time.perf_counter()
-        try:
-            clauses = encoder.encode(mid, deadline=deadline)
-        except TimeoutError:
-            total_encoding_time += time.perf_counter() - t_enc0
-            status = "TimeLimitReached"
-            break
-        total_encoding_time += time.perf_counter() - t_enc0
-
-        if time.perf_counter() >= deadline:
-            status = "TimeLimitReached"
-            break
-
-        t_boot0 = time.perf_counter()
-        solver = Solver(name=solver_name, bootstrap_with=clauses)
-        total_encoding_time += time.perf_counter() - t_boot0
-
-        remaining_time = deadline - time.perf_counter()
-        if remaining_time <= 0:
-            solver.delete()
-            status = "TimeLimitReached"
-            break
-
-        t_s0 = time.perf_counter()
-        timer = threading.Timer(max(0.01, remaining_time), solver.interrupt)
-        timer.start()
-
+        solver = Solver(name=solver_name)
         sat = None
         model = None
         try:
-            sat = solver.solve_limited(expect_interrupt=True)
-            if sat is True:
-                model = solver.get_model()
+            t_enc0 = time.perf_counter()
+            try:
+                encoder.add_base_clauses(solver, deadline=deadline)
+                encoder.add_bandwidth_clauses(solver, mid, deadline=deadline)
+            except TimeoutError:
+                total_encoding_time += time.perf_counter() - t_enc0
+                status = "TimeLimitReached"
+                break
+            total_encoding_time += time.perf_counter() - t_enc0
+
+            remaining_time = deadline - time.perf_counter()
+            if remaining_time <= 0:
+                status = "TimeLimitReached"
+                break
+
+            t_s0 = time.perf_counter()
+            timer = threading.Timer(max(0.01, remaining_time), solver.interrupt)
+            timer.start()
+            try:
+                sat = solver.solve_limited(expect_interrupt=True)
+                if sat is True:
+                    model = solver.get_model()
+            finally:
+                timer.cancel()
+                total_solve_time += time.perf_counter() - t_s0
         finally:
-            timer.cancel()
-            total_solve_time += time.perf_counter() - t_s0
             solver.delete()
 
         if sat is None or time.perf_counter() >= deadline:

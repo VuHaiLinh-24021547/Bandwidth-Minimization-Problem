@@ -1,6 +1,6 @@
 """Order & Hybrid CNF Encoding for the Bandwidth Minimization Problem."""
 
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 import time
 
 
@@ -83,11 +83,11 @@ class OrderEncoder:
             raise ValueError(f"Invalid indices for S(i={i}, a={a}) with n={self.n}")
         return self.num_order_vars + self.num_exact_vars + (a - 1) * (self.n - 1) + i
 
-    def get_base_clauses(self, deadline: Optional[float] = None) -> List[List[int]]:
-        if self._base_clauses is not None:
-            return self._base_clauses
-
-        clauses: List[List[int]] = []
+    def _emit_base_clauses(
+        self,
+        emit: Callable[[List[int]], None],
+        deadline: Optional[float] = None,
+    ) -> None:
         n = self.n
 
         # Monotonicity: O(v, t+1) => O(v, t)
@@ -95,54 +95,130 @@ class OrderEncoder:
             if deadline is not None and time.perf_counter() >= deadline:
                 raise TimeoutError("Encoding time limit exceeded")
             for t in range(2, n):
-                clauses.append([-self.var_O(v, t + 1), self.var_O(v, t)])
+                emit([-self.var_O(v, t + 1), self.var_O(v, t)])
 
         # Channeling: X(v, a) <=> O(v, a) and not O(v, a+1)
         for v in range(1, n + 1):
             if deadline is not None and time.perf_counter() >= deadline:
                 raise TimeoutError("Encoding time limit exceeded")
-            clauses.append([-self.var_X(v, 1), -self.var_O(v, 2)])
-            clauses.append([self.var_X(v, 1), self.var_O(v, 2)])
+            emit([-self.var_X(v, 1), -self.var_O(v, 2)])
+            emit([self.var_X(v, 1), self.var_O(v, 2)])
 
             for a in range(2, n):
-                clauses.append([-self.var_X(v, a), self.var_O(v, a)])
-                clauses.append([-self.var_X(v, a), -self.var_O(v, a + 1)])
-                clauses.append([-self.var_O(v, a), self.var_O(v, a + 1), self.var_X(v, a)])
+                emit([-self.var_X(v, a), self.var_O(v, a)])
+                emit([-self.var_X(v, a), -self.var_O(v, a + 1)])
+                emit([-self.var_O(v, a), self.var_O(v, a + 1), self.var_X(v, a)])
 
-            clauses.append([-self.var_X(v, n), self.var_O(v, n)])
-            clauses.append([self.var_X(v, n), -self.var_O(v, n)])
+            emit([-self.var_X(v, n), self.var_O(v, n)])
+            emit([self.var_X(v, n), -self.var_O(v, n)])
 
         # Bijectivity (ALO on vertices and positions)
         for v in range(1, n + 1):
-            clauses.append([self.var_X(v, a) for a in range(1, n + 1)])
+            if deadline is not None and time.perf_counter() >= deadline:
+                raise TimeoutError("Encoding time limit exceeded")
+            emit([self.var_X(v, a) for a in range(1, n + 1)])
         for a in range(1, n + 1):
-            clauses.append([self.var_X(v, a) for v in range(1, n + 1)])
+            if deadline is not None and time.perf_counter() >= deadline:
+                raise TimeoutError("Encoding time limit exceeded")
+            emit([self.var_X(v, a) for v in range(1, n + 1)])
 
         # AMO on positions (Sinz Sequential Counter O(n^2) vs Pairwise O(n^3))
         if self.amo_encoding == "seqcounter":
             for a in range(1, n + 1):
                 if deadline is not None and time.perf_counter() >= deadline:
                     raise TimeoutError("Encoding time limit exceeded")
-                clauses.append([-self.var_X(1, a), self.var_S(1, a)])
+                emit([-self.var_X(1, a), self.var_S(1, a)])
                 for i in range(2, n):
-                    clauses.append([-self.var_X(i, a), self.var_S(i, a)])
-                    clauses.append([-self.var_S(i - 1, a), self.var_S(i, a)])
-                    clauses.append([-self.var_S(i - 1, a), -self.var_X(i, a)])
-                clauses.append([-self.var_S(n - 1, a), -self.var_X(n, a)])
+                    emit([-self.var_X(i, a), self.var_S(i, a)])
+                    emit([-self.var_S(i - 1, a), self.var_S(i, a)])
+                    emit([-self.var_S(i - 1, a), -self.var_X(i, a)])
+                emit([-self.var_S(n - 1, a), -self.var_X(n, a)])
         else:
             for a in range(1, n + 1):
                 if deadline is not None and time.perf_counter() >= deadline:
                     raise TimeoutError("Encoding time limit exceeded")
                 for u in range(1, n + 1):
                     for v in range(u + 1, n + 1):
-                        clauses.append([-self.var_X(u, a), -self.var_X(v, a)])
+                        emit([-self.var_X(u, a), -self.var_X(v, a)])
 
         # Reflection symmetry breaking on max-degree anchor vertex
         if self.use_symmetry_breaking and n >= 2:
             mid_cutoff = (n + 1) // 2 + 1
             if mid_cutoff <= n:
-                clauses.append([-self.var_O(self.anchor_vertex, mid_cutoff)])
+                emit([-self.var_O(self.anchor_vertex, mid_cutoff)])
 
+    def _emit_bandwidth_clauses(
+        self,
+        k: int,
+        emit: Callable[[List[int]], None],
+        act_var: Optional[int] = None,
+        deadline: Optional[float] = None,
+    ) -> None:
+        n = self.n
+        if k >= n - 1:
+            return
+
+        if act_var is not None:
+            neg_act = -act_var
+            out = lambda cl: emit([neg_act, *cl])
+        else:
+            out = emit
+
+        if self.use_degree_bounds:
+            for u in range(1, n + 1):
+                d = self.degrees[u]
+                if d > k:
+                    min_pos = d - k + 1
+                    if 2 <= min_pos <= n:
+                        out([self.var_O(u, min_pos)])
+                    max_pos = n - d + k
+                    if 1 <= max_pos <= n - 1:
+                        out([-self.var_O(u, max_pos + 1)])
+
+        for idx, (u, v) in enumerate(self.edges):
+            if deadline is not None and (idx & 15) == 0 and time.perf_counter() >= deadline:
+                raise TimeoutError("Encoding time limit exceeded")
+
+            for t in range(k + 2, n + 1):
+                out([-self.var_O(u, t), self.var_O(v, t - k)])
+                out([-self.var_O(v, t), self.var_O(u, t - k)])
+
+            if self.use_strengthening:
+                for a in range(1, n + 1):
+                    if a - k >= 2:
+                        out([-self.var_X(u, a), self.var_O(v, a - k)])
+                        out([-self.var_X(v, a), self.var_O(u, a - k)])
+                    if a + k + 1 <= n:
+                        out([-self.var_X(u, a), -self.var_O(v, a + k + 1)])
+                        out([-self.var_X(v, a), -self.var_O(u, a + k + 1)])
+
+        # 2-hop distance bounds: d_G(u, v) == 2 => |f(u) - f(v)| <= 2k
+        if self.use_2hop and 2 * k < n - 1:
+            two_k = 2 * k
+            for idx, (u, v) in enumerate(self.two_hop_edges):
+                if deadline is not None and (idx & 15) == 0 and time.perf_counter() >= deadline:
+                    raise TimeoutError("Encoding time limit exceeded")
+                for t in range(two_k + 2, n + 1):
+                    out([-self.var_O(u, t), self.var_O(v, t - two_k)])
+                    out([-self.var_O(v, t), self.var_O(u, t - two_k)])
+
+    def add_base_clauses(self, solver, deadline: Optional[float] = None) -> None:
+        self._emit_base_clauses(solver.add_clause, deadline=deadline)
+
+    def add_bandwidth_clauses(
+        self,
+        solver,
+        k: int,
+        act_var: Optional[int] = None,
+        deadline: Optional[float] = None,
+    ) -> None:
+        self._emit_bandwidth_clauses(k, solver.add_clause, act_var=act_var, deadline=deadline)
+
+    def get_base_clauses(self, deadline: Optional[float] = None) -> List[List[int]]:
+        if self._base_clauses is not None:
+            return self._base_clauses
+        clauses: List[List[int]] = []
+        self._emit_base_clauses(clauses.append, deadline=deadline)
         self._base_clauses = clauses
         return clauses
 
@@ -153,53 +229,7 @@ class OrderEncoder:
         deadline: Optional[float] = None,
     ) -> List[List[int]]:
         clauses: List[List[int]] = []
-        n = self.n
-
-        if k >= n - 1:
-            return clauses
-
-        if self.use_degree_bounds:
-            for u in range(1, n + 1):
-                d = self.degrees[u]
-                if d > k:
-                    min_pos = d - k + 1
-                    if 2 <= min_pos <= n:
-                        clauses.append([self.var_O(u, min_pos)])
-                    max_pos = n - d + k
-                    if 1 <= max_pos <= n - 1:
-                        clauses.append([-self.var_O(u, max_pos + 1)])
-
-        for idx, (u, v) in enumerate(self.edges):
-            if deadline is not None and (idx & 63) == 0 and time.perf_counter() >= deadline:
-                raise TimeoutError("Encoding time limit exceeded")
-
-            for t in range(k + 2, n + 1):
-                clauses.append([-self.var_O(u, t), self.var_O(v, t - k)])
-                clauses.append([-self.var_O(v, t), self.var_O(u, t - k)])
-
-            if self.use_strengthening:
-                for a in range(1, n + 1):
-                    if a - k >= 2:
-                        clauses.append([-self.var_X(u, a), self.var_O(v, a - k)])
-                        clauses.append([-self.var_X(v, a), self.var_O(u, a - k)])
-                    if a + k + 1 <= n:
-                        clauses.append([-self.var_X(u, a), -self.var_O(v, a + k + 1)])
-                        clauses.append([-self.var_X(v, a), -self.var_O(u, a + k + 1)])
-
-        # 2-hop distance bounds: d_G(u, v) == 2 => |f(u) - f(v)| <= 2k
-        if self.use_2hop and 2 * k < n - 1:
-            two_k = 2 * k
-            for idx, (u, v) in enumerate(self.two_hop_edges):
-                if deadline is not None and (idx & 63) == 0 and time.perf_counter() >= deadline:
-                    raise TimeoutError("Encoding time limit exceeded")
-                for t in range(two_k + 2, n + 1):
-                    clauses.append([-self.var_O(u, t), self.var_O(v, t - two_k)])
-                    clauses.append([-self.var_O(v, t), self.var_O(u, t - two_k)])
-
-        if act_var is not None:
-            neg_act = -act_var
-            return [[neg_act, *cl] for cl in clauses]
-
+        self._emit_bandwidth_clauses(k, clauses.append, act_var=act_var, deadline=deadline)
         return clauses
 
     def encode(self, k: int, deadline: Optional[float] = None) -> List[List[int]]:
