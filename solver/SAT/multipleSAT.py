@@ -18,7 +18,7 @@ from solver.SAT.pairwiseMultipleSAT import solve as solve_pairwise
 def solve(
     n: int,
     edges: List[Tuple[int, int]],
-    time_limit: int = 60,
+    time_limit: int = 120,
     lower_bound: Optional[int] = None,
     solver_name: str = "glucose4",
     encoding: str = "order",
