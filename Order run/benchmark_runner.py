@@ -5,26 +5,26 @@ import csv
 import glob
 import os
 import sys
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from solver.SAT import orderIncrementalSAT, orderMultipleSAT
 from utils.hb_parser import load_hb_file
 from utils.lb_loader import (
     get_instance_category,
     get_instance_stem,
     load_lb_mapping,
     lookup_lb,
+    verify_solution,
 )
-from solver.SAT import multipleSAT, incrementalSAT
 
 
 SOLVER_REGISTRY = {
-    "order_incremental_sat": ("Order IncrementalSAT", incrementalSAT.solve),
-    "order_multiple_sat": ("Order MultipleSAT", multipleSAT.solve),
+    "order_incremental_sat": ("Order IncrementalSAT", orderIncrementalSAT.solve),
+    "order_multiple_sat": ("Order MultipleSAT", orderMultipleSAT.solve),
 }
 
 CSV_HEADERS = [
@@ -39,17 +39,11 @@ CSV_HEADERS = [
 ]
 
 
-def find_instances(input_dir: str, category: str = "small_instances") -> List[str]:
-    """Find and sort instances by vertex count."""
+def find_instances(input_dir: str, category: str = "small_instances") -> Dict[str, List[str]]:
     if category == "all":
-        pattern = os.path.join(input_dir, "**", "*.mtx.rnd")
+        categories = ["small_instances", "large_instances"]
     else:
-        pattern = os.path.join(input_dir, category, "*.mtx.rnd")
-
-    files = glob.glob(pattern, recursive=True)
-    if not files:
-        fallback_pat = pattern.replace(".mtx.rnd", ".mtx")
-        files = glob.glob(fallback_pat, recursive=True)
+        categories = [category]
 
     def get_vertex_count(f: str) -> int:
         try:
@@ -62,13 +56,21 @@ def find_instances(input_dir: str, category: str = "small_instances") -> List[st
             pass
         return 999999
 
-    files.sort(key=get_vertex_count)
-    return files
+    grouped: Dict[str, List[str]] = {}
+    for cat in categories:
+        pattern = os.path.join(input_dir, cat, "*.mtx.rnd")
+        files = glob.glob(pattern)
+        if not files:
+            files = glob.glob(pattern.replace(".mtx.rnd", ".mtx"))
+        files.sort(key=get_vertex_count)
+        if files:
+            grouped[cat] = files
+    return grouped
 
 
 def run_benchmark(
     category: str = "small_instances",
-    time_limit: int = 15,
+    time_limit: int = 60,
     solvers: Optional[List[str]] = None,
     instances: Optional[List[str]] = None,
     limit: Optional[int] = None,
@@ -76,102 +78,106 @@ def run_benchmark(
     output_dir: str = os.path.join(PROJECT_ROOT, "output"),
     lb_csv: str = os.path.join(PROJECT_ROOT, "input", "lb.csv"),
 ):
-    """Run Order Encoding SAT benchmarks and export results directly to output folder."""
     if solvers is None:
         solvers = ["order_incremental_sat", "order_multiple_sat"]
 
     lb_table = load_lb_mapping(lb_csv)
-    file_list = find_instances(input_dir, category)
+    grouped = find_instances(input_dir, category)
 
     if instances:
-        file_list = [
-            f for f in file_list
-            if get_instance_stem(f) in instances or os.path.basename(f) in instances
-        ]
+        for cat in list(grouped.keys()):
+            grouped[cat] = [
+                f for f in grouped[cat]
+                if get_instance_stem(f) in instances or os.path.basename(f) in instances
+            ]
 
     if limit is not None and limit > 0:
-        file_list = file_list[:limit]
+        for cat in list(grouped.keys()):
+            grouped[cat] = grouped[cat][:limit]
 
-    if not file_list:
+    if not any(grouped.values()):
         print(f"No instances found for category '{category}' in '{input_dir}'.")
         return
 
-    cat_output_dir = os.path.join(output_dir, category)
-    os.makedirs(cat_output_dir, exist_ok=True)
+    for cat, file_list in grouped.items():
+        if not file_list:
+            continue
 
-    print("=" * 96)
-    print(f"ORDER ENCODING BENCHMARK — Category: {category} ({len(file_list)} instances)")
-    print(f"Time limit: {time_limit}s | Solvers: {', '.join(solvers)}")
-    print(f"Output directory: {cat_output_dir}")
-    print("=" * 96)
-    print(f"{'Instance':<14} | {'n':<4} | {'|E|':<5} | {'LB':<4} | " +
-          " | ".join(f"{SOLVER_REGISTRY[s][0]:<22}" for s in solvers))
-    print("-" * 96)
+        cat_output_dir = os.path.join(output_dir, cat)
+        os.makedirs(cat_output_dir, exist_ok=True)
 
-    # Initialize CSV writers
-    csv_handles = {}
-    csv_writers = {}
-    for sk in solvers:
-        disp_name, _ = SOLVER_REGISTRY[sk]
-        safe_name = disp_name.replace(" ", "_").replace("-", "_")
-        csv_file = os.path.join(cat_output_dir, f"{safe_name}.csv")
-        fh = open(csv_file, mode="w", newline="", encoding="utf-8", buffering=1)
-        writer = csv.DictWriter(fh, fieldnames=CSV_HEADERS)
-        writer.writeheader()
-        csv_handles[sk] = fh
-        csv_writers[sk] = writer
+        print("=" * 96)
+        print(f"ORDER ENCODING BENCHMARK — Category: {cat} ({len(file_list)} instances)")
+        print(f"Time limit: {time_limit}s | Solvers: {', '.join(solvers)}")
+        print(f"Output directory: {cat_output_dir}")
+        print("=" * 96)
+        print(
+            f"{'Instance':<14} | {'n':<4} | {'|E|':<5} | {'LB':<4} | "
+            + " | ".join(f"{SOLVER_REGISTRY[s][0]:<22}" for s in solvers)
+        )
+        print("-" * 96)
 
-    try:
-        for idx, fpath in enumerate(file_list, start=1):
-            stem = get_instance_stem(fpath)
-            try:
-                n, edges = load_hb_file(fpath)
-            except Exception as e:
-                print(f"Failed to load {fpath}: {e}")
-                continue
+        csv_handles = {}
+        csv_writers = {}
+        for sk in solvers:
+            disp_name, _ = SOLVER_REGISTRY[sk]
+            safe_name = disp_name.replace(" ", "_").replace("-", "_")
+            csv_file = os.path.join(cat_output_dir, f"{safe_name}.csv")
+            fh = open(csv_file, mode="w", newline="", encoding="utf-8", buffering=1)
+            writer = csv.DictWriter(fh, fieldnames=CSV_HEADERS)
+            writer.writeheader()
+            csv_handles[sk] = fh
+            csv_writers[sk] = writer
 
-            lb = lookup_lb(stem, lb_table)
-            lb_str = str(lb) if lb is not None else "-"
+        try:
+            for fpath in file_list:
+                stem = get_instance_stem(fpath)
+                try:
+                    n, edges = load_hb_file(fpath)
+                except Exception as e:
+                    print(f"Failed to load {fpath}: {e}")
+                    continue
 
-            row_summary = []
-            for sk in solvers:
-                disp_name, solver_fn = SOLVER_REGISTRY[sk]
-                res = solver_fn(n, edges, time_limit=time_limit, lower_bound=lb)
+                lb = lookup_lb(stem, lb_table)
+                lb_str = str(lb) if lb is not None else "-"
 
-                bw = res.get("bandwidth", "")
-                enc_t = res.get("encoding_time", 0.0)
-                slv_t = res.get("solve_time", 0.0)
-                tot_t = (enc_t if enc_t else 0.0) + (slv_t if slv_t else 0.0)
-                status = res.get("status", "")
+                row_summary = []
+                for sk in solvers:
+                    disp_name, solver_fn = SOLVER_REGISTRY[sk]
+                    res = solver_fn(n, edges, time_limit=time_limit, lower_bound=lb)
+                    verify_solution(n, edges, res)
 
-                csv_row = {
-                    "instance": stem,
-                    "n": n,
-                    "edges": len(edges),
-                    "lb": lb if lb is not None else "",
-                    "solver": disp_name,
-                    "bandwidth": bw if bw is not None else "",
-                    "encoding_time": f"{enc_t:.4f}" if enc_t is not None else "",
-                    "solve_time": f"{slv_t:.4f}" if slv_t is not None else "",
-                }
-                csv_writers[sk].writerow(csv_row)
+                    bw = res.get("bandwidth", "")
+                    enc_t = res.get("encoding_time", 0.0)
+                    slv_t = res.get("solve_time", 0.0)
+                    tot_t = (enc_t if enc_t else 0.0) + (slv_t if slv_t else 0.0)
+                    status = res.get("status", "")
 
-                bw_disp = str(bw) if bw is not None else "-"
-                row_summary.append(f"BW={bw_disp:<3} ({status:<8} {tot_t:5.2f}s)")
+                    csv_writers[sk].writerow({
+                        "instance": stem,
+                        "n": n,
+                        "edges": len(edges),
+                        "lb": lb if lb is not None else "",
+                        "solver": disp_name,
+                        "bandwidth": bw if bw is not None else "",
+                        "encoding_time": f"{enc_t:.4f}" if enc_t is not None else "",
+                        "solve_time": f"{slv_t:.4f}" if slv_t is not None else "",
+                    })
 
-            summary_str = " | ".join(row_summary)
-            print(f"{stem:<14} | {n:<4} | {len(edges):<5} | {lb_str:<4} | {summary_str}")
+                    bw_disp = str(bw) if bw is not None else "-"
+                    row_summary.append(f"BW={bw_disp:<3} ({status:<8} {tot_t:5.2f}s)")
 
-    finally:
-        for fh in csv_handles.values():
-            fh.close()
+                print(f"{stem:<14} | {n:<4} | {len(edges):<5} | {lb_str:<4} | " + " | ".join(row_summary))
+        finally:
+            for fh in csv_handles.values():
+                fh.close()
 
-    print("=" * 96)
-    print("Benchmark completed. Results exported directly to:")
-    for sk in solvers:
-        disp_name, _ = SOLVER_REGISTRY[sk]
-        safe_name = disp_name.replace(" ", "_").replace("-", "_")
-        print(f"  - {os.path.join(cat_output_dir, f'{safe_name}.csv')}")
+        print("=" * 96)
+        print("Exported:")
+        for sk in solvers:
+            disp_name, _ = SOLVER_REGISTRY[sk]
+            safe_name = disp_name.replace(" ", "_").replace("-", "_")
+            print(f"  - {os.path.join(cat_output_dir, f'{safe_name}.csv')}")
 
 
 if __name__ == "__main__":
@@ -181,45 +187,18 @@ if __name__ == "__main__":
         type=str,
         default="small_instances",
         choices=["small_instances", "large_instances", "all"],
-        help="Instance category (default: small_instances)",
     )
-    parser.add_argument(
-        "--time-limit", "-t",
-        type=int,
-        default=15,
-        help="Per-instance time limit in seconds (default: 15)",
-    )
+    parser.add_argument("--time-limit", "-t", type=int, default=60)
     parser.add_argument(
         "--solvers", "-s",
         nargs="+",
         choices=["order_incremental_sat", "order_multiple_sat"],
         default=["order_incremental_sat", "order_multiple_sat"],
-        help="Solvers to benchmark",
     )
-    parser.add_argument(
-        "--instances",
-        nargs="*",
-        default=None,
-        help="Optional list of specific instance stems",
-    )
-    parser.add_argument(
-        "--limit", "-l",
-        type=int,
-        default=None,
-        help="Limit number of instances to benchmark",
-    )
-    parser.add_argument(
-        "--input-dir", "-i",
-        type=str,
-        default=os.path.join(PROJECT_ROOT, "input"),
-        help="Input folder",
-    )
-    parser.add_argument(
-        "--output-dir", "-o",
-        type=str,
-        default=os.path.join(PROJECT_ROOT, "output"),
-        help="Output folder",
-    )
+    parser.add_argument("--instances", nargs="*", default=None)
+    parser.add_argument("--limit", "-l", type=int, default=None)
+    parser.add_argument("--input-dir", "-i", type=str, default=os.path.join(PROJECT_ROOT, "input"))
+    parser.add_argument("--output-dir", "-o", type=str, default=os.path.join(PROJECT_ROOT, "output"))
     args = parser.parse_args()
 
     run_benchmark(

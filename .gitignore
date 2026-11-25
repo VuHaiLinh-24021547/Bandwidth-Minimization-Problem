@@ -7,6 +7,13 @@ Tài liệu/**
 KE_HOACH_4_TRU_COT_ORDER_ENCODING.md
 *TRU_COT*.md
 
+# IDE & OS local configs
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
 # Python artifacts
 __pycache__/
 *.py[cod]
@@ -16,7 +23,11 @@ __pycache__/
 env/
 venv/
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Outputs and logs
+# Temporary outputs and logs
 *.csv.tmp
 *.log
+*.cnf
