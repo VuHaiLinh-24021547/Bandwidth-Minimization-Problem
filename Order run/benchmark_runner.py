@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -63,7 +64,10 @@ def _run_single_solver_in_process(
     time_limit: int,
     lb: Optional[int],
 ) -> Dict:
-    """Run one solver on one instance inside an isolated child process with hard timeout."""
+    disp_name, _ = SOLVER_REGISTRY[solver_key]
+    fd, ckpt_path = tempfile.mkstemp(prefix="order_sat_ckpt_", suffix=".json")
+    os.close(fd)
+
     cmd = [
         sys.executable,
         os.path.abspath(__file__),
@@ -76,9 +80,11 @@ def _run_single_solver_in_process(
         str(time_limit),
         "--single-lb",
         "" if lb is None else str(lb),
+        "--single-ckpt",
+        ckpt_path,
     ]
-    hard_timeout = float(time_limit) + 20.0
-    t0 = time.perf_counter()
+    hard_timeout = float(time_limit) + 90.0
+    t_wall0 = time.perf_counter()
     try:
         proc = subprocess.run(
             cmd,
@@ -94,13 +100,36 @@ def _run_single_solver_in_process(
         pass
     except Exception:
         pass
+    finally:
+        ckpt_data = None
+        try:
+            if os.path.exists(ckpt_path) and os.path.getsize(ckpt_path) > 0:
+                with open(ckpt_path, "r", encoding="utf-8") as cf:
+                    ckpt_data = json.load(cf)
+        except Exception:
+            ckpt_data = None
+        try:
+            if os.path.exists(ckpt_path):
+                os.remove(ckpt_path)
+        except OSError:
+            pass
 
-    # Fallback to verified RCM upper bound if C++ solver stalled past hard timeout
+    total_elapsed = time.perf_counter() - t_wall0
+    if ckpt_data is not None:
+        enc_t = float(ckpt_data.get("encoding_time", 0.0))
+        sol_t = max(float(ckpt_data.get("solve_time", 0.0)), max(0.0, min(float(time_limit), total_elapsed) - enc_t))
+        return {
+            "solver": disp_name,
+            "status": "TimeLimitReached",
+            "bandwidth": int(ckpt_data["bandwidth"]),
+            "encoding_time": enc_t,
+            "solve_time": sol_t,
+        }
+
     n, edges = load_hb_file(fpath)
     t_rcm0 = time.perf_counter()
     bw, perm = orderIncrementalSAT.get_rcm_upper_bound(n, edges)
     enc_t = time.perf_counter() - t_rcm0
-    disp_name, _ = SOLVER_REGISTRY[solver_key]
     res = {
         "solver": disp_name,
         "status": "TimeLimitReached",
@@ -164,7 +193,7 @@ def _write_instance_result(
         })
 
         bw_disp = str(bw) if bw is not None else "-"
-        row_summary.append(f"BW={bw_disp:<3} ({status:<8} {tot_t:5.2f}s)")
+        row_summary.append(f"BW={bw_disp:<3} ({status:<8} enc={enc_t:5.2f}s sol={slv_t:5.2f}s)")
 
     print(
         f"[{idx + 1:>2}/{total:<2}] {stem:<14} | {n:<4} | {num_edges:<5} | {lb_str:<4} | "
@@ -175,7 +204,7 @@ def _write_instance_result(
 
 def run_benchmark(
     category: str = "small_instances",
-    time_limit: int = 60,
+    time_limit: int = 120,
     solvers: Optional[List[str]] = None,
     instances: Optional[List[str]] = None,
     limit: Optional[int] = None,
@@ -212,17 +241,17 @@ def run_benchmark(
         cat_output_dir = os.path.join(output_dir, cat)
         os.makedirs(cat_output_dir, exist_ok=True)
 
-        print("=" * 104, flush=True)
+        print("=" * 116, flush=True)
         print(f"ORDER ENCODING BENCHMARK — Category: {cat} ({len(file_list)} instances)", flush=True)
         print(f"Time limit: {time_limit}s | Workers: {workers} | Solvers: {', '.join(solvers)}", flush=True)
         print(f"Output directory: {cat_output_dir}", flush=True)
-        print("=" * 104, flush=True)
+        print("=" * 116, flush=True)
         print(
             f"{'Progress':<7} {'Instance':<14} | {'n':<4} | {'|E|':<5} | {'LB':<4} | "
-            + " | ".join(f"{SOLVER_REGISTRY[s][0]:<24}" for s in solvers),
+            + " | ".join(f"{SOLVER_REGISTRY[s][0]:<36}" for s in solvers),
             flush=True,
         )
-        print("-" * 104, flush=True)
+        print("-" * 116, flush=True)
 
         csv_handles = {}
         csv_writers = {}
@@ -268,7 +297,7 @@ def run_benchmark(
             for fh in csv_handles.values():
                 fh.close()
 
-        print("=" * 104, flush=True)
+        print("=" * 116, flush=True)
         print("Exported:", flush=True)
         for sk in solvers:
             disp_name, _ = SOLVER_REGISTRY[sk]
@@ -280,7 +309,26 @@ def _run_single_worker_cli(args) -> None:
     n, edges = load_hb_file(args.single_file)
     lb = int(args.single_lb) if args.single_lb else None
     _, solver_fn = SOLVER_REGISTRY[args.single_solver]
-    res = solver_fn(n, edges, time_limit=args.time_limit, lower_bound=lb)
+    ckpt_path = args.single_ckpt
+
+    def _save_ckpt(bw: int, enc_t: float, sol_t: float) -> None:
+        if not ckpt_path:
+            return
+        try:
+            tmp_p = ckpt_path + ".tmp"
+            with open(tmp_p, "w", encoding="utf-8") as cf:
+                json.dump({"bandwidth": bw, "encoding_time": enc_t, "solve_time": sol_t}, cf)
+            os.replace(tmp_p, ckpt_path)
+        except Exception:
+            pass
+
+    res = solver_fn(
+        n,
+        edges,
+        time_limit=args.time_limit,
+        lower_bound=lb,
+        progress_callback=_save_ckpt,
+    )
     verify_solution(n, edges, res)
     if res.get("permutation_valid") and res.get("verified_bandwidth") is not None:
         res["bandwidth"] = int(res["verified_bandwidth"])
@@ -296,7 +344,7 @@ if __name__ == "__main__":
         default="small_instances",
         choices=["small_instances", "large_instances", "all"],
     )
-    parser.add_argument("--time-limit", "-t", type=int, default=60)
+    parser.add_argument("--time-limit", "-t", type=int, default=120)
     parser.add_argument(
         "--solvers", "-s",
         nargs="+",
@@ -312,6 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("--single-file", type=str, default="", help=argparse.SUPPRESS)
     parser.add_argument("--single-solver", type=str, default="", help=argparse.SUPPRESS)
     parser.add_argument("--single-lb", type=str, default="", help=argparse.SUPPRESS)
+    parser.add_argument("--single-ckpt", type=str, default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.single_worker:

@@ -6,13 +6,15 @@ import os
 import sys
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from encoder.order import OrderEncoder
+
+ADAPTIVE_LARGE_N_THRESHOLD = 250
 
 try:
     import numpy as np
@@ -54,18 +56,23 @@ def _identity_upper_bound(n: int, edges: List[Tuple[int, int]]) -> Tuple[int, Li
 def solve(
     n: int,
     edges: List[Tuple[int, int]],
-    time_limit: int = 60,
+    time_limit: int = 120,
     lower_bound: Optional[int] = None,
     solver_name: str = "glucose4",
     use_rcm: bool = True,
-    use_strengthening: bool = True,
+    use_strengthening: Optional[bool] = None,
     use_symmetry_breaking: bool = True,
     use_degree_bounds: bool = True,
-    use_2hop: bool = True,
+    use_2hop: Optional[bool] = None,
     amo_encoding: str = "seqcounter",
     search_strategy: str = "binary",
+    progress_callback: Optional[Callable[[int, float, float], None]] = None,
 ) -> Dict:
     from pysat.solvers import Solver
+
+    # Adaptive mode: enable heavy 2-hop & hybrid strengthening on n <= 250, keep lean Order CNF on larger graphs
+    eff_strengthening = (n <= ADAPTIVE_LARGE_N_THRESHOLD) if use_strengthening is None else use_strengthening
+    eff_2hop = (n <= ADAPTIVE_LARGE_N_THRESHOLD) if use_2hop is None else use_2hop
 
     total_encoding_time = 0.0
     total_solve_time = 0.0
@@ -78,6 +85,9 @@ def solve(
     best_bw, best_perm = get_rcm_upper_bound(n, edges) if use_rcm else _identity_upper_bound(n, edges)
     total_encoding_time += time.perf_counter() - t0
     status = "Feasible"
+
+    if progress_callback is not None:
+        progress_callback(best_bw, total_encoding_time, total_solve_time)
 
     if best_bw <= lb:
         return {
@@ -106,15 +116,17 @@ def solve(
             encoder = OrderEncoder(
                 n,
                 edges,
-                use_strengthening=use_strengthening,
+                use_strengthening=eff_strengthening,
                 use_symmetry_breaking=use_symmetry_breaking,
                 use_degree_bounds=use_degree_bounds,
-                use_2hop=use_2hop,
+                use_2hop=eff_2hop,
                 amo_encoding=amo_encoding,
             )
             encoder.add_base_clauses(solver, deadline=deadline)
         except TimeoutError:
             total_encoding_time += time.perf_counter() - t_enc0
+            if progress_callback is not None:
+                progress_callback(best_bw, total_encoding_time, total_solve_time)
             return {
                 "solver": "Order IncrementalSAT",
                 "status": "TimeLimitReached",
@@ -124,6 +136,9 @@ def solve(
                 "solve_time": 0.0,
             }
         total_encoding_time += time.perf_counter() - t_enc0
+
+        if progress_callback is not None:
+            progress_callback(best_bw, total_encoding_time, total_solve_time)
 
         if search_strategy == "binary":
             next_act_var = encoder.total_vars + 1
@@ -144,9 +159,14 @@ def solve(
                     encoder.add_bandwidth_clauses(solver, mid, act_var=act_var, deadline=deadline)
                 except TimeoutError:
                     total_encoding_time += time.perf_counter() - t_delta0
+                    if progress_callback is not None:
+                        progress_callback(best_bw, total_encoding_time, total_solve_time)
                     status = "TimeLimitReached"
                     break
                 total_encoding_time += time.perf_counter() - t_delta0
+
+                if progress_callback is not None:
+                    progress_callback(best_bw, total_encoding_time, total_solve_time)
 
                 remaining_time = deadline - time.perf_counter()
                 if remaining_time <= 0:
@@ -165,6 +185,9 @@ def solve(
                     solver.clear_interrupt()
                     total_solve_time += time.perf_counter() - t_s0
 
+                if progress_callback is not None:
+                    progress_callback(best_bw, total_encoding_time, total_solve_time)
+
                 if sat is None or time.perf_counter() >= deadline:
                     status = "TimeLimitReached"
                     break
@@ -178,6 +201,8 @@ def solve(
                     if actual_bw <= best_bw:
                         best_bw = actual_bw
                         best_perm = perm
+                        if progress_callback is not None:
+                            progress_callback(best_bw, total_encoding_time, total_solve_time)
 
                     solver.add_clause([act_var])
 
@@ -207,6 +232,9 @@ def solve(
                     status = "TimeLimitReached"
                     break
                 total_encoding_time += time.perf_counter() - t_delta0
+
+                if progress_callback is not None:
+                    progress_callback(best_bw, total_encoding_time, total_solve_time)
 
                 remaining_time = deadline - time.perf_counter()
                 if remaining_time <= 0:
@@ -238,6 +266,8 @@ def solve(
                     if actual_bw <= best_bw:
                         best_bw = actual_bw
                         best_perm = perm
+                        if progress_callback is not None:
+                            progress_callback(best_bw, total_encoding_time, total_solve_time)
 
                     if best_bw <= lb:
                         status = "Optimal"
@@ -271,4 +301,4 @@ if __name__ == "__main__":
     n, edges = load_hb_file(test_file)
     stem = get_instance_stem(test_file)
     lb = lookup_lb(stem, load_lb_mapping())
-    print(solve(n, edges, time_limit=60, lower_bound=lb))
+    print(solve(n, edges, time_limit=120, lower_bound=lb))
