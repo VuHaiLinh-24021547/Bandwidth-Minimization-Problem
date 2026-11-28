@@ -67,12 +67,15 @@ với ý nghĩa $X_{v, a} = \text{True} \iff f(v) = a$ (đỉnh $v$ được gá
    - **Cận theo đỉnh neo:** Với mọi đỉnh $u$ cách đỉnh neo $v^*$ khoảng $d = d_G(v^*, u)$, ta có $f(u) \le \max\_p[v^*] + d \cdot k$.
    - **Lan truyền cố định điểm (Arc-Consistency Propagation):** Lặp trên mọi cạnh $(u, v) \in E$ để siết chặt $min\_p[u] \ge min\_p[v] - k$ và $max\_p[u] \le max\_p[v] + k$ đến hội tụ. Nếu tồn tại $u$ sao cho $min\_p[u] > max\_p[u]$, công thức lập tức vô nghiệm (UNSAT) mà không cần gọi SAT solver.
 
-4. **Mệnh đề hỗ trợ (`use_support=True`)**
-   - Với mọi cạnh $(u, v) \in E$ và vị trí hợp lệ $a \in [min\_p[u], max\_p[u]]$, thêm mệnh đề:
+4. **Mệnh đề hỗ trợ có kiểm soát độ rộng (`use_support=True`, `max_support_width=40`)**
+   - Với mọi cạnh $(u, v) \in E$ và vị trí hợp lệ $a \in [min\_p[u], max\_p[u]]$, nếu không tồn tại $b \in [min\_p[v], max\_p[v]]$ thỏa $|a - b| \le k$ thì phát trực tiếp mệnh đề đơn cắt tỉa $\neg X_{u,a}$; nếu khoảng hợp lệ có độ rộng $\le 40$, thêm mệnh đề hỗ trợ:
      $$\neg X_{u, a} \lor \bigvee_{b = \max(min\_p[v], a - k)}^{\min(max\_p[v], a + k)} X_{v, b}$$
-   - Tăng cường đáng kể khả năng lan truyền đơn vị (Unit Propagation) trong bộ giải CDCL (Glucose4).
+   - Tăng cường mạnh lan truyền đơn vị (Unit Propagation) ở vùng $k$ nhỏ/trung bình mà tránh bùng nổ độ dài mệnh đề ở vùng $k$ lớn.
 
-5. **Tìm kiếm nhị phân gia tăng có biến giả định (`get_bandwidth_clauses_delta`)**
+5. **Nạp mệnh đề theo luồng phân mảnh (`chunk_size = 32768`)**
+   - Các phương thức `add_base_clauses`, `add_bandwidth_clauses_delta`, `add_encoded_clauses` đẩy mệnh đề trực tiếp vào PySAT `solver.append_formula()` theo từng lô `32,768` mệnh đề và kiểm tra `deadline` sau mỗi lô, giữ bộ nhớ đệm Python chỉ vài MB và ngăn vượt quá giới hạn thời gian khi nạp công thức lớn.
+
+6. **Tìm kiếm nhị phân gia tăng có biến giả định (`get_bandwidth_clauses_delta`)**
    - Trong `pairwiseIncrementalSAT.py`, bộ giải khởi tạo `Solver` một lần duy nhất với các mệnh đề cơ sở (bijection + symmetry breaking).
    - Ở mỗi bước nhị phân thử $k = \text{mid}$, tạo một biến giả định mới `act_var`, chỉ sinh các mệnh đề chênh lệch giữa ngưỡng đã khóa gần nhất `locked_k` và `mid` được bảo vệ bởi literal `-act_var`, rồi gọi `solve_limited(assumptions=[act_var])`:
      - Nếu **SAT**: khóa vĩnh viễn `[act_var]`, cập nhật `locked_k = mid` và thu hẹp `high = min(mid - 1, actual_bw - 1)`.

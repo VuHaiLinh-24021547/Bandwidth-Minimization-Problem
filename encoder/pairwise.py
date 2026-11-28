@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 
 class EncodingTimeoutError(TimeoutError):
@@ -17,12 +17,14 @@ class PairwiseEncoder:
         use_symmetry_breaking: bool = True,
         use_degree_bounds: bool = True,
         use_support: bool = True,
+        max_support_width: int = 40,
         deadline: Optional[float] = None,
     ):
         self.n = n
         self.use_symmetry_breaking = use_symmetry_breaking
         self.use_degree_bounds = use_degree_bounds
         self.use_support = use_support
+        self.max_support_width = max_support_width
 
         is_zero_indexed = any(u == 0 or v == 0 for u, v in edges) if edges else False
         if not is_zero_indexed and edges:
@@ -104,6 +106,9 @@ class PairwiseEncoder:
         min_p = [1] * (n + 1)
         max_p = [n] * (n + 1)
 
+        if n == 0:
+            return min_p, max_p, True
+
         if self.use_symmetry_breaking and n >= 2:
             max_p[self.anchor_vertex] = (n + 1) // 2
 
@@ -158,19 +163,32 @@ class PairwiseEncoder:
 
         return min_p, max_p, True
 
-    def get_base_clauses(self, deadline: Optional[float] = None) -> List[List[int]]:
-        if self._base_clauses is not None:
-            return self._base_clauses
-
-        clauses: List[List[int]] = []
+    def _emit_base_clauses_chunked(
+        self,
+        flush_chunk: Callable[[List[List[int]]], None],
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> None:
         n = self.n
+        if n == 0:
+            return
+        buf: List[List[int]] = []
+        append = buf.append
+
+        def maybe_flush() -> None:
+            if len(buf) >= chunk_size:
+                self._check_deadline(deadline)
+                flush_chunk(buf)
+                buf.clear()
 
         for v in range(1, n + 1):
             base = (v - 1) * n
-            clauses.append([base + a for a in range(1, n + 1)])
+            append([base + a for a in range(1, n + 1)])
+        maybe_flush()
 
         for a in range(1, n + 1):
-            clauses.append([(v - 1) * n + a for v in range(1, n + 1)])
+            append([(v - 1) * n + a for v in range(1, n + 1)])
+        maybe_flush()
 
         for v in range(1, n + 1):
             self._check_deadline(deadline)
@@ -178,49 +196,86 @@ class PairwiseEncoder:
             for a in range(1, n):
                 xa = -(base + a)
                 for b in range(a + 1, n + 1):
-                    clauses.append([xa, -(base + b)])
+                    append([xa, -(base + b)])
+                maybe_flush()
 
         for a in range(1, n + 1):
             self._check_deadline(deadline)
             for u in range(1, n):
                 xu = -((u - 1) * n + a)
                 for v in range(u + 1, n + 1):
-                    clauses.append([xu, -((v - 1) * n + a)])
+                    append([xu, -((v - 1) * n + a)])
+                maybe_flush()
 
         if self.use_symmetry_breaking and n >= 2:
             mid_cutoff = (n + 1) // 2 + 1
             base = (self.anchor_vertex - 1) * n
             for a in range(mid_cutoff, n + 1):
-                clauses.append([-(base + a)])
+                append([-(base + a)])
 
+        if buf:
+            self._check_deadline(deadline)
+            flush_chunk(buf)
+            buf.clear()
+
+    def add_base_clauses(
+        self,
+        solver,
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> None:
+        def _flush(chunk: List[List[int]]) -> None:
+            solver.append_formula(chunk)
+            self._check_deadline(deadline)
+
+        self._emit_base_clauses_chunked(_flush, deadline=deadline, chunk_size=chunk_size)
+
+    def get_base_clauses(self, deadline: Optional[float] = None) -> List[List[int]]:
+        if self._base_clauses is not None:
+            return self._base_clauses
+        clauses: List[List[int]] = []
+        self._emit_base_clauses_chunked(clauses.extend, deadline=deadline)
         self._base_clauses = clauses
         return clauses
 
-    def get_bandwidth_clauses(
+    def _emit_bandwidth_clauses_chunked(
         self,
         k: int,
+        flush_chunk: Callable[[List[List[int]]], None],
         act_var: Optional[int] = None,
         deadline: Optional[float] = None,
-    ) -> List[List[int]]:
-        clauses: List[List[int]] = []
+        chunk_size: int = 32768,
+    ) -> bool:
         n = self.n
-
-        if k >= n - 1:
-            return clauses
+        if n == 0 or k >= n - 1:
+            return True
 
         min_p, max_p, feasible = self.compute_domain_bounds(k)
-        prefix = [-act_var] if act_var is not None else []
-
         if not feasible:
-            b = 1
-            return [prefix + [b], prefix + [-b]]
+            if act_var is not None:
+                flush_chunk([[-act_var]])
+            else:
+                flush_chunk([[1], [-1]])
+            return False
+
+        prefix = [-act_var] if act_var is not None else []
+        buf: List[List[int]] = []
+        append = buf.append
+        max_sup = self.max_support_width
+
+        def maybe_flush() -> None:
+            if len(buf) >= chunk_size:
+                self._check_deadline(deadline)
+                flush_chunk(buf)
+                buf.clear()
 
         for u in range(1, n + 1):
             base = (u - 1) * n
             for a in range(1, min_p[u]):
-                clauses.append(prefix + [-(base + a)])
+                append(prefix + [-(base + a)])
             for a in range(max_p[u] + 1, n + 1):
-                clauses.append(prefix + [-(base + a)])
+                append(prefix + [-(base + a)])
+            maybe_flush()
 
         for u, v in self.edges:
             self._check_deadline(deadline)
@@ -233,17 +288,18 @@ class PairwiseEncoder:
                 xua = -(base_u + a)
                 hi_left = min(xpv + 1, a - k)
                 for b in range(mpv, hi_left):
-                    clauses.append(prefix + [xua, -(base_v + b)])
+                    append(prefix + [xua, -(base_v + b)])
                 lo_right = max(mpv, a + k + 1)
                 for b in range(lo_right, xpv + 1):
-                    clauses.append(prefix + [xua, -(base_v + b)])
+                    append(prefix + [xua, -(base_v + b)])
                 if self.use_support:
                     lo = max(mpv, a - k)
                     hi = min(xpv, a + k)
                     if lo > hi:
-                        clauses.append(prefix + [xua])
-                    elif lo > mpv or hi < xpv:
-                        clauses.append(prefix + [xua] + [base_v + b for b in range(lo, hi + 1)])
+                        append(prefix + [xua])
+                    elif (lo > mpv or hi < xpv) and (max_sup <= 0 or (hi - lo + 1) <= max_sup):
+                        append(prefix + [xua] + [base_v + b for b in range(lo, hi + 1)])
+                maybe_flush()
 
             if self.use_support:
                 for b in range(mpv, xpv + 1):
@@ -251,41 +307,91 @@ class PairwiseEncoder:
                     lo = max(mpu, b - k)
                     hi = min(xpu, b + k)
                     if lo > hi:
-                        clauses.append(prefix + [xvb])
-                    elif lo > mpu or hi < xpu:
-                        clauses.append(prefix + [xvb] + [base_u + a for a in range(lo, hi + 1)])
+                        append(prefix + [xvb])
+                    elif (lo > mpu or hi < xpu) and (max_sup <= 0 or (hi - lo + 1) <= max_sup):
+                        append(prefix + [xvb] + [base_u + a for a in range(lo, hi + 1)])
+                maybe_flush()
 
-        return clauses
+        if buf:
+            self._check_deadline(deadline)
+            flush_chunk(buf)
+            buf.clear()
+        return True
 
-    def get_bandwidth_clauses_delta(
+    def add_bandwidth_clauses(
         self,
-        k_new: int,
-        k_prev: Optional[int] = None,
+        solver,
+        k: int,
+        act_var: Optional[int] = None,
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> bool:
+        def _flush(chunk: List[List[int]]) -> None:
+            solver.append_formula(chunk)
+            self._check_deadline(deadline)
+
+        return self._emit_bandwidth_clauses_chunked(
+            k, _flush, act_var=act_var, deadline=deadline, chunk_size=chunk_size
+        )
+
+    def get_bandwidth_clauses(
+        self,
+        k: int,
         act_var: Optional[int] = None,
         deadline: Optional[float] = None,
     ) -> List[List[int]]:
+        clauses: List[List[int]] = []
+        self._emit_bandwidth_clauses_chunked(
+            k, clauses.extend, act_var=act_var, deadline=deadline
+        )
+        return clauses
+
+    def _emit_bandwidth_clauses_delta_chunked(
+        self,
+        k_new: int,
+        flush_chunk: Callable[[List[List[int]]], None],
+        k_prev: Optional[int] = None,
+        act_var: Optional[int] = None,
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> bool:
         n = self.n
         if k_prev is None or k_prev >= n - 1:
-            return self.get_bandwidth_clauses(k_new, act_var=act_var, deadline=deadline)
+            return self._emit_bandwidth_clauses_chunked(
+                k_new, flush_chunk, act_var=act_var, deadline=deadline, chunk_size=chunk_size
+            )
 
-        clauses: List[List[int]] = []
-        if k_new >= k_prev:
-            return clauses
+        if n == 0 or k_new >= k_prev:
+            return True
 
         min_prev, max_prev, _ = self.compute_domain_bounds(k_prev)
         min_p, max_p, feasible = self.compute_domain_bounds(k_new)
-        prefix = [-act_var] if act_var is not None else []
 
         if not feasible:
-            b = 1
-            return [prefix + [b], prefix + [-b]]
+            if act_var is not None:
+                flush_chunk([[-act_var]])
+            else:
+                flush_chunk([[1], [-1]])
+            return False
+
+        prefix = [-act_var] if act_var is not None else []
+        buf: List[List[int]] = []
+        append = buf.append
+        max_sup = self.max_support_width
+
+        def maybe_flush() -> None:
+            if len(buf) >= chunk_size:
+                self._check_deadline(deadline)
+                flush_chunk(buf)
+                buf.clear()
 
         for u in range(1, n + 1):
             base = (u - 1) * n
             for a in range(min_prev[u], min(min_p[u], n + 1)):
-                clauses.append(prefix + [-(base + a)])
+                append(prefix + [-(base + a)])
             for a in range(max(1, max_p[u] + 1), max_prev[u] + 1):
-                clauses.append(prefix + [-(base + a)])
+                append(prefix + [-(base + a)])
+            maybe_flush()
 
         upper_dist = min(k_prev, n - 1)
         for u, v in self.edges:
@@ -299,11 +405,12 @@ class PairwiseEncoder:
                 for a in range(mpu, min(xpu, n - dist) + 1):
                     b = a + dist
                     if mpv <= b <= xpv:
-                        clauses.append(prefix + [-(base_u + a), -(base_v + b)])
+                        append(prefix + [-(base_u + a), -(base_v + b)])
                 for b in range(mpv, min(xpv, n - dist) + 1):
                     a = b + dist
                     if mpu <= a <= xpu:
-                        clauses.append(prefix + [-(base_v + b), -(base_u + a)])
+                        append(prefix + [-(base_v + b), -(base_u + a)])
+                maybe_flush()
 
             if self.use_support:
                 for a in range(mpu, xpu + 1):
@@ -311,55 +418,126 @@ class PairwiseEncoder:
                     lo = max(mpv, a - k_new)
                     hi = min(xpv, a + k_new)
                     if lo > hi:
-                        clauses.append(prefix + [xua])
-                    elif lo > mpv or hi < xpv:
-                        clauses.append(prefix + [xua] + [base_v + b for b in range(lo, hi + 1)])
+                        append(prefix + [xua])
+                    elif (lo > mpv or hi < xpv) and (max_sup <= 0 or (hi - lo + 1) <= max_sup):
+                        append(prefix + [xua] + [base_v + b for b in range(lo, hi + 1)])
+                maybe_flush()
                 for b in range(mpv, xpv + 1):
                     xvb = -(base_v + b)
                     lo = max(mpu, b - k_new)
                     hi = min(xpu, b + k_new)
                     if lo > hi:
-                        clauses.append(prefix + [xvb])
-                    elif lo > mpu or hi < xpu:
-                        clauses.append(prefix + [xvb] + [base_u + a for a in range(lo, hi + 1)])
+                        append(prefix + [xvb])
+                    elif (lo > mpu or hi < xpu) and (max_sup <= 0 or (hi - lo + 1) <= max_sup):
+                        append(prefix + [xvb] + [base_u + a for a in range(lo, hi + 1)])
+                maybe_flush()
 
+        if buf:
+            self._check_deadline(deadline)
+            flush_chunk(buf)
+            buf.clear()
+        return True
+
+    def add_bandwidth_clauses_delta(
+        self,
+        solver,
+        k_new: int,
+        k_prev: Optional[int] = None,
+        act_var: Optional[int] = None,
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> bool:
+        def _flush(chunk: List[List[int]]) -> None:
+            solver.append_formula(chunk)
+            self._check_deadline(deadline)
+
+        return self._emit_bandwidth_clauses_delta_chunked(
+            k_new,
+            _flush,
+            k_prev=k_prev,
+            act_var=act_var,
+            deadline=deadline,
+            chunk_size=chunk_size,
+        )
+
+    def get_bandwidth_clauses_delta(
+        self,
+        k_new: int,
+        k_prev: Optional[int] = None,
+        act_var: Optional[int] = None,
+        deadline: Optional[float] = None,
+    ) -> List[List[int]]:
+        clauses: List[List[int]] = []
+        self._emit_bandwidth_clauses_delta_chunked(
+            k_new,
+            clauses.extend,
+            k_prev=k_prev,
+            act_var=act_var,
+            deadline=deadline,
+        )
         return clauses
 
-    def encode(self, k: int, deadline: Optional[float] = None) -> List[List[int]]:
+    def _emit_encoded_clauses_chunked(
+        self,
+        k: int,
+        flush_chunk: Callable[[List[List[int]]], None],
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> bool:
         n = self.n
+        if n == 0:
+            return True
         if k >= n - 1:
-            return self.get_base_clauses(deadline=deadline)
+            self._emit_base_clauses_chunked(flush_chunk, deadline=deadline, chunk_size=chunk_size)
+            return True
 
         min_p, max_p, feasible = self.compute_domain_bounds(k)
         if not feasible:
-            return [[1], [-1]]
+            flush_chunk([[1], [-1]])
+            return False
 
-        clauses: List[List[int]] = []
+        valid_by_pos: List[List[int]] = [[] for _ in range(n + 1)]
+        for a in range(1, n + 1):
+            vu = [u for u in range(1, n + 1) if min_p[u] <= a <= max_p[u]]
+            if not vu:
+                flush_chunk([[1], [-1]])
+                return False
+            valid_by_pos[a] = vu
+
+        buf: List[List[int]] = []
+        append = buf.append
+        max_sup = self.max_support_width
+
+        def maybe_flush() -> None:
+            if len(buf) >= chunk_size:
+                self._check_deadline(deadline)
+                flush_chunk(buf)
+                buf.clear()
 
         for u in range(1, n + 1):
             self._check_deadline(deadline)
             base = (u - 1) * n
             mpu, xpu = min_p[u], max_p[u]
-            clauses.append([base + a for a in range(mpu, xpu + 1)])
+            append([base + a for a in range(mpu, xpu + 1)])
             for a in range(1, mpu):
-                clauses.append([-(base + a)])
+                append([-(base + a)])
             for a in range(xpu + 1, n + 1):
-                clauses.append([-(base + a)])
+                append([-(base + a)])
             for a in range(mpu, xpu):
                 xa = -(base + a)
                 for b in range(a + 1, xpu + 1):
-                    clauses.append([xa, -(base + b)])
+                    append([xa, -(base + b)])
+                maybe_flush()
 
         for a in range(1, n + 1):
             self._check_deadline(deadline)
-            valid_u = [u for u in range(1, n + 1) if min_p[u] <= a <= max_p[u]]
-            if not valid_u:
-                return [[1], [-1]]
-            clauses.append([(u - 1) * n + a for u in valid_u])
+            valid_u = valid_by_pos[a]
+            append([(u - 1) * n + a for u in valid_u])
             for i in range(len(valid_u) - 1):
                 xua = -((valid_u[i] - 1) * n + a)
                 for j in range(i + 1, len(valid_u)):
-                    clauses.append([xua, -((valid_u[j] - 1) * n + a)])
+                    append([xua, -((valid_u[j] - 1) * n + a)])
+                maybe_flush()
 
         for u, v in self.edges:
             self._check_deadline(deadline)
@@ -372,17 +550,18 @@ class PairwiseEncoder:
                 xua = -(base_u + a)
                 hi_left = min(xpv + 1, a - k)
                 for b in range(mpv, hi_left):
-                    clauses.append([xua, -(base_v + b)])
+                    append([xua, -(base_v + b)])
                 lo_right = max(mpv, a + k + 1)
                 for b in range(lo_right, xpv + 1):
-                    clauses.append([xua, -(base_v + b)])
+                    append([xua, -(base_v + b)])
                 if self.use_support:
                     lo = max(mpv, a - k)
                     hi = min(xpv, a + k)
                     if lo > hi:
-                        clauses.append([xua])
-                    elif lo > mpv or hi < xpv:
-                        clauses.append([xua] + [base_v + b for b in range(lo, hi + 1)])
+                        append([xua])
+                    elif (lo > mpv or hi < xpv) and (max_sup <= 0 or (hi - lo + 1) <= max_sup):
+                        append([xua] + [base_v + b for b in range(lo, hi + 1)])
+                maybe_flush()
 
             if self.use_support:
                 for b in range(mpv, xpv + 1):
@@ -390,10 +569,41 @@ class PairwiseEncoder:
                     lo = max(mpu, b - k)
                     hi = min(xpu, b + k)
                     if lo > hi:
-                        clauses.append([xvb])
-                    elif lo > mpu or hi < xpu:
-                        clauses.append([xvb] + [base_u + a for a in range(lo, hi + 1)])
+                        append([xvb])
+                    elif (lo > mpu or hi < xpu) and (max_sup <= 0 or (hi - lo + 1) <= max_sup):
+                        append([xvb] + [base_u + a for a in range(lo, hi + 1)])
+                maybe_flush()
 
+        if buf:
+            self._check_deadline(deadline)
+            flush_chunk(buf)
+            buf.clear()
+        return True
+
+    def add_encoded_clauses(
+        self,
+        solver,
+        k: int,
+        deadline: Optional[float] = None,
+        chunk_size: int = 32768,
+    ) -> bool:
+        def _flush(chunk: List[List[int]]) -> None:
+            solver.append_formula(chunk)
+            self._check_deadline(deadline)
+
+        return self._emit_encoded_clauses_chunked(
+            k, _flush, deadline=deadline, chunk_size=chunk_size
+        )
+
+    def encode(self, k: int, deadline: Optional[float] = None) -> List[List[int]]:
+        if k >= self.n - 1:
+            return self.get_base_clauses(deadline=deadline)
+        clauses: List[List[int]] = []
+        feasible = self._emit_encoded_clauses_chunked(
+            k, clauses.extend, deadline=deadline
+        )
+        if not feasible:
+            return [[1], [-1]]
         return clauses
 
     def decode(self, model: List[int]) -> Dict[int, int]:

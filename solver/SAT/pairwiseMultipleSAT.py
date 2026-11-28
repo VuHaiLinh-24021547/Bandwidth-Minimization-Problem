@@ -45,7 +45,7 @@ def solve(
     status = "Feasible"
     _notify_progress(progress_callback, best_bw, total_encoding_time, total_solve_time)
 
-    if best_bw <= lb:
+    if best_bw <= lb or not edges or n <= 1:
         return {
             "solver": solver_label,
             "status": "Optimal",
@@ -92,52 +92,45 @@ def solve(
 
         mid = (low + high) // 2
 
-        t_enc0 = time.perf_counter()
-        try:
-            clauses = encoder.encode(mid, deadline=deadline)
-        except (EncodingTimeoutError, MemoryError):
-            total_encoding_time += time.perf_counter() - t_enc0
-            status = "TimeLimitReached"
-            break
-        total_encoding_time += time.perf_counter() - t_enc0
-
-        if time.perf_counter() >= deadline or total_encoding_time >= time_limit:
-            status = "TimeLimitReached"
-            break
-
-        t_boot0 = time.perf_counter()
-        try:
-            solver = Solver(name=solver_name, bootstrap_with=clauses)
-        except MemoryError:
-            total_encoding_time += time.perf_counter() - t_boot0
-            status = "TimeLimitReached"
-            break
-        total_encoding_time += time.perf_counter() - t_boot0
-
-        remaining_wall = deadline - time.perf_counter()
-        remaining_solve = float(time_limit) - total_solve_time
-        remaining_time = min(remaining_wall, remaining_solve)
-        if remaining_time <= 0 or total_encoding_time >= time_limit:
-            solver.delete()
-            status = "TimeLimitReached"
-            break
-
-        t_s0 = time.perf_counter()
-        timer = threading.Timer(max(0.01, remaining_time), solver.interrupt)
-        timer.start()
-
+        solver = Solver(name=solver_name)
         sat = None
         model = None
         try:
-            sat = solver.solve_limited(expect_interrupt=True)
-            if sat is True:
-                model = solver.get_model()
+            t_enc0 = time.perf_counter()
+            try:
+                feasible = encoder.add_encoded_clauses(solver, mid, deadline=deadline)
+            except (EncodingTimeoutError, MemoryError):
+                total_encoding_time += time.perf_counter() - t_enc0
+                status = "TimeLimitReached"
+                break
+            total_encoding_time += time.perf_counter() - t_enc0
+
+            if not feasible:
+                low = mid + 1
+                _notify_progress(progress_callback, best_bw, total_encoding_time, total_solve_time)
+                continue
+
+            remaining_wall = deadline - time.perf_counter()
+            remaining_solve = float(time_limit) - total_solve_time
+            remaining_time = min(remaining_wall, remaining_solve)
+            if remaining_time <= 0 or total_encoding_time >= time_limit:
+                status = "TimeLimitReached"
+                break
+
+            t_s0 = time.perf_counter()
+            timer = threading.Timer(max(0.01, remaining_time), solver.interrupt)
+            timer.start()
+            try:
+                sat = solver.solve_limited(expect_interrupt=True)
+                if sat is True:
+                    model = solver.get_model()
+            finally:
+                timer.cancel()
+                total_solve_time += time.perf_counter() - t_s0
         finally:
-            timer.cancel()
-            total_solve_time += time.perf_counter() - t_s0
             solver.delete()
 
-        if sat is None or time.perf_counter() >= deadline or total_solve_time >= time_limit:
+        if sat is None:
             status = "TimeLimitReached"
             break
 
