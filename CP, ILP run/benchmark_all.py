@@ -51,14 +51,26 @@ def get_solver_registry() -> Dict[str, Tuple[str, any]]:
         registry["gurobi"] = ("Gurobi MIP", None)
 
     try:
-        from solver.SAT import multipleSAT
-        registry["pairwise_multiple_sat"] = ("Pairwise MultipleSAT", multipleSAT.solve)
+        from solver.SAT import orderMultipleSAT
+        registry["order_multiple_sat"] = ("Order MultipleSAT", orderMultipleSAT.solve)
+    except Exception:
+        registry["order_multiple_sat"] = ("Order MultipleSAT", None)
+
+    try:
+        from solver.SAT import orderIncrementalSAT
+        registry["order_incremental_sat"] = ("Order IncrementalSAT", orderIncrementalSAT.solve)
+    except Exception:
+        registry["order_incremental_sat"] = ("Order IncrementalSAT", None)
+
+    try:
+        from solver.SAT import pairwiseMultipleSAT
+        registry["pairwise_multiple_sat"] = ("Pairwise MultipleSAT", pairwiseMultipleSAT.solve)
     except Exception:
         registry["pairwise_multiple_sat"] = ("Pairwise MultipleSAT", None)
 
     try:
-        from solver.SAT import incrementalSAT
-        registry["pairwise_incremental_sat"] = ("Pairwise IncrementalSAT", incrementalSAT.solve)
+        from solver.SAT import pairwiseIncrementalSAT
+        registry["pairwise_incremental_sat"] = ("Pairwise IncrementalSAT", pairwiseIncrementalSAT.solve)
     except Exception:
         registry["pairwise_incremental_sat"] = ("Pairwise IncrementalSAT", None)
 
@@ -127,9 +139,18 @@ def run_benchmark():
     parser.add_argument(
         "--solvers", "-s",
         nargs="+",
-        choices=["cplex_cp", "cplex_mip", "ortools", "gurobi", "pairwise_multiple_sat", "pairwise_incremental_sat"],
+        choices=[
+            "cplex_cp",
+            "cplex_mip",
+            "ortools",
+            "gurobi",
+            "order_multiple_sat",
+            "order_incremental_sat",
+            "pairwise_multiple_sat",
+            "pairwise_incremental_sat",
+        ],
         default=["cplex_cp", "cplex_mip", "ortools", "gurobi"],
-        help="Solvers to benchmark (default: all)",
+        help="Solvers to benchmark (default: CP and ILP solvers)",
     )
     parser.add_argument(
         "--instances",

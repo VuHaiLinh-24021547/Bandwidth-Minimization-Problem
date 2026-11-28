@@ -1,0 +1,33 @@
+# Reference documents (Tài liệu tham khảo)
+Tài liệu/
+Tài liệu/**
+*.pdf
+
+# Internal notes & plans (ignored on git)
+KE_HOACH_4_TRU_COT_ORDER_ENCODING.md
+*TRU_COT*.md
+
+# IDE & OS local configs
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Temporary outputs and logs
+*.csv.tmp
+*.log
+*.cnf

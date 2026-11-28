@@ -17,6 +17,7 @@ class PairwiseEncoder:
         use_symmetry_breaking: bool = True,
         use_degree_bounds: bool = True,
         use_support: bool = True,
+        deadline: Optional[float] = None,
     ):
         self.n = n
         self.use_symmetry_breaking = use_symmetry_breaking
@@ -56,14 +57,18 @@ class PairwiseEncoder:
         self.total_vars = n * n
         self._base_clauses: Optional[List[List[int]]] = None
 
-        self.dist, self.balls = self._precompute_bfs()
+        self.dist, self.balls = self._precompute_bfs(deadline=deadline)
 
-    def _precompute_bfs(self) -> Tuple[List[List[int]], List[List[int]]]:
+    def _precompute_bfs(
+        self, deadline: Optional[float] = None
+    ) -> Tuple[List[List[int]], List[List[int]]]:
         n = self.n
         adj = self.adj
         dist = [[-1] * (n + 1) for _ in range(n + 1)]
         balls = [[0] * (n + 1) for _ in range(n + 1)]
         for s in range(1, n + 1):
+            if (s & 15) == 0:
+                self._check_deadline(deadline)
             d = dist[s]
             d[s] = 0
             q = deque([s])
