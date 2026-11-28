@@ -109,11 +109,12 @@ def _run_single_solver_in_process(
                     ckpt_data = json.load(cf)
         except Exception:
             ckpt_data = None
-        try:
-            if os.path.exists(ckpt_path):
-                os.remove(ckpt_path)
-        except OSError:
-            pass
+        for p in (ckpt_path, ckpt_path + ".tmp"):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except OSError:
+                pass
 
     total_elapsed = time.perf_counter() - t_wall0
     if ckpt_data is not None:
@@ -306,11 +307,18 @@ def _run_single_worker_cli(args) -> None:
     def _save_ckpt(bw: int, enc_t: float, sol_t: float) -> None:
         if not ckpt_path:
             return
+        payload = {"bandwidth": bw, "encoding_time": enc_t, "solve_time": sol_t}
+        tmp_p = ckpt_path + ".tmp"
         try:
-            tmp_p = ckpt_path + ".tmp"
             with open(tmp_p, "w", encoding="utf-8") as cf:
-                json.dump({"bandwidth": bw, "encoding_time": enc_t, "solve_time": sol_t}, cf)
+                json.dump(payload, cf)
             os.replace(tmp_p, ckpt_path)
+        except OSError:
+            try:
+                with open(ckpt_path, "w", encoding="utf-8") as cf:
+                    json.dump(payload, cf)
+            except Exception:
+                pass
         except Exception:
             pass
 

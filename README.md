@@ -11,7 +11,6 @@ Benchmark suite for the Bandwidth Minimization Problem using:
 - `CP, ILP run/benchmark_all.py` — Batch benchmark across instances in `input/` and export results to `output/`.
 - `Order run/benchmark_runner.py` — Isolated subprocess batch benchmark runner for Order Encoding SAT solvers.
 - `Pairwise run/benchmark_runner.py` — Isolated subprocess batch benchmark runner for Pairwise Encoding SAT solvers.
-- `docs/PAIRWISE_SAT.md` — Technical documentation for Pairwise Encoding, optimizations, and benchmark usage.
 - `encoder/order.py` — Dedicated Order & Hybrid Encoding CNF (`OrderEncoder`: Sequential Counter AMO, 2-hop bounds, assumption-guarded thresholds, symmetry breaking & degree pruning).
 - `encoder/pairwise.py` — Dedicated Pairwise Encoding CNF (`PairwiseEncoder`: direct $X_{v,a}$ encoding, multi-hop BFS domain pruning, arc consistency, symmetry breaking, support clauses & incremental delta encoding).
 - `solver/SAT/` — Strictly separated SAT solvers:
